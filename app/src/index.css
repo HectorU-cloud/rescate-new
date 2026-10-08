@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Al Rescate — paleta cálida: hueso + verde rescate + naranja descuento */
+    --background: 48 33% 95%; /* #F6F4EC hueso cálido */
+    --foreground: 150 20% 11%; /* #16211B tinta verdoso */
+    --card: 0 0% 100%;
+    --card-foreground: 150 20% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 150 20% 11%;
+    --primary: 152 100% 33%; /* #00A651 verde rescate */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 46 30% 90%;
+    --secondary-foreground: 150 20% 11%;
+    --muted: 46 24% 90%;
+    --muted-foreground: 150 8% 40%;
+    --accent: 22 93% 48%; /* #F25C05 naranja rescate */
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 150 14% 85%;
+    --input: 150 14% 82%;
+    --ring: 152 100% 33%;
+    --radius: 1rem;
+    --sidebar-background: 48 33% 96%;
+    --sidebar-foreground: 150 20% 11%;
+    --sidebar-primary: 152 100% 33%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 46 30% 90%;
+    --sidebar-accent-foreground: 150 20% 11%;
+    --sidebar-border: 150 14% 88%;
+    --sidebar-ring: 152 100% 33%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}
+
+@layer utilities {
+  .font-display {
+    font-family: "Baloo 2", "Nunito", system-ui, sans-serif;
+  }
+  .safe-bottom {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Animación suave para el indicador de pedido activo */
+@keyframes pulse-dot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.35); opacity: 0.6; }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+@keyframes slide-up {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.animate-slide-up {
+  animation: slide-up 0.35s cubic-bezier(0.25, 1, 0.5, 1) both;
+}
