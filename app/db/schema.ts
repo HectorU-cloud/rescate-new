@@ -187,3 +187,17 @@ export const orderItems = mysqlTable(
 );
 
 export type OrderItem = typeof orderItems.$inferSelect;
+
+
+// Última ubicación conocida del repartidor por pedido activo.
+// Se conserva un único punto por pedido para no acumular trayectos innecesarios.
+export const courierLocations = mysqlTable("courier_locations", {
+  orderId: bigint("orderId", { mode: "number", unsigned: true }).primaryKey(),
+  courierId: bigint("courierId", { mode: "number", unsigned: true }).notNull(),
+  lat: double("lat").notNull(),
+  lng: double("lng").notNull(),
+  accuracy: double("accuracy"),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export type CourierLocation = typeof courierLocations.$inferSelect;

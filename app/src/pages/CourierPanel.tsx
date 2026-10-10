@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
@@ -20,6 +21,36 @@ export default function CourierPanel() {
     refetchInterval: 10_000,
   });
   const earnings = trpc.courier.earnings.useQuery(undefined, { enabled });
+  const locationUpdate = trpc.courier.updateLocation.useMutation();
+  const activeOrderIds = (mine.data ?? []).filter((d) => d.order.status === "picked_up").map((d) => d.order.id);
+  const activeOrderKey = activeOrderIds.join(",");
+
+  useEffect(() => {
+    if (!enabled || activeOrderIds.length === 0 || !navigator.geolocation) return;
+    let lastSent = 0;
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const now = Date.now();
+        if (now - lastSent < 8000) return;
+        lastSent = now;
+        for (const orderId of activeOrderIds) {
+          locationUpdate.mutate({
+            orderId,
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+          });
+        }
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) toast.error("Activa el permiso de ubicación para compartir tu GPS");
+      },
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+    // Rebuild the GPS watcher when active deliveries change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, activeOrderKey]);
   const accept = trpc.courier.accept.useMutation({
     onSuccess: () => {
       toast.success("¡Pedido tuyo! Ve por él al local");
@@ -76,6 +107,7 @@ export default function CourierPanel() {
       {/* En curso */}
       {active.length > 0 && (
         <section className="space-y-3">
+          <p className="rounded-xl bg-brand-soft px-3 py-2 text-xs font-bold text-brand-dark">📍 Comparte tu ubicación GPS mientras esta pantalla esté abierta y tengas permiso de ubicación.</p>
           <h2 className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
             Entregas en curso
           </h2>

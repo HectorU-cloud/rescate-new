@@ -3,9 +3,35 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { businesses, orderItems, orders } from "@db/schema";
+import { businesses, courierLocations, orderItems, orders } from "@db/schema";
 
 export const courierRouter = createRouter({
+  // El navegador/app del repartidor envía su posición mientras una entrega está activa.
+  updateLocation: authedQuery
+    .input(z.object({
+      orderId: z.number().int().positive(),
+      lat: z.number().min(-90).max(90),
+      lng: z.number().min(-180).max(180),
+      accuracy: z.number().min(0).max(100000).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.user.appRole !== "courier") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Solo un repartidor puede compartir ubicación" });
+      }
+      const db = getDb();
+      const order = await db.query.orders.findFirst({
+        where: and(eq(orders.id, input.orderId), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up"), eq(orders.type, "delivery")),
+      });
+      if (!order) throw new TRPCError({ code: "FORBIDDEN", message: "No tienes una entrega activa para este pedido" });
+      await db.insert(courierLocations).values({
+        orderId: order.id, courierId: ctx.user.id, lat: input.lat, lng: input.lng,
+        accuracy: input.accuracy ?? null, updatedAt: new Date(),
+      }).onDuplicateKeyUpdate({ set: {
+        courierId: ctx.user.id, lat: input.lat, lng: input.lng,
+        accuracy: input.accuracy ?? null, updatedAt: new Date(),
+      }});
+      return { ok: true };
+    }),
   // Pedidos listos que aún no tienen repartidor
   available: authedQuery.query(async ({ ctx }) => {
     if (ctx.user.appRole !== "courier") {
@@ -98,6 +124,8 @@ export const courierRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes entregar este pedido" });
       }
       await db.update(orders).set({ status: "delivered" }).where(eq(orders.id, order.id));
+      // Eliminar la posición al cerrar la entrega para no conservar datos de ubicación innecesarios.
+      await db.delete(courierLocations).where(eq(courierLocations.orderId, order.id));
       return { ok: true };
     }),
 

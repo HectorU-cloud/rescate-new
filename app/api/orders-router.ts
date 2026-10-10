@@ -8,6 +8,7 @@ import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
 import {
   businesses,
+  courierLocations,
   orderItems,
   orders,
   products,
@@ -194,6 +195,24 @@ export const ordersRouter = createRouter({
     const byId = new Map(bizRows.map((b) => [b.id, b]));
     return rows.map((o) => ({ order: o, business: byId.get(o.businessId) ?? null }));
   }),
+
+  liveLocation: authedQuery
+    .input(z.object({ id: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      const order = await db.query.orders.findFirst({ where: eq(orders.id, input.id) });
+      if (!order || order.type !== "delivery" || order.status !== "picked_up" || !order.courierId) return null;
+      const ownedBiz = await db.query.businesses.findFirst({
+        where: and(eq(businesses.id, order.businessId), eq(businesses.ownerId, ctx.user.id)),
+      });
+      const allowed = order.customerId === ctx.user.id || order.courierId === ctx.user.id || !!ownedBiz || ctx.user.role === "admin";
+      if (!allowed) throw new TRPCError({ code: "FORBIDDEN", message: "No puedes consultar la ubicación de este pedido" });
+      const location = await db.query.courierLocations.findFirst({ where: eq(courierLocations.orderId, order.id) });
+      if (!location || location.courierId !== order.courierId) return null;
+      // No mostrar una posición antigua como si fuera en vivo.
+      if (Date.now() - new Date(location.updatedAt).getTime() > 2 * 60 * 1000) return { ...location, stale: true };
+      return { ...location, stale: false };
+    }),
 
   byId: authedQuery
     .input(z.object({ id: z.number().int().positive() }))

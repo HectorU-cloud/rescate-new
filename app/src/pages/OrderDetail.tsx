@@ -25,6 +25,13 @@ export default function OrderDetail() {
           : 8_000,
     },
   );
+  const liveLocation = trpc.orders.liveLocation.useQuery(
+    { id: orderId },
+    {
+      enabled: isAuthenticated && Number.isFinite(orderId),
+      refetchInterval: 8_000,
+    },
+  );
   const cancel = trpc.orders.cancel.useMutation({
     onSuccess: () => {
       toast.success("Pedido cancelado");
@@ -109,13 +116,16 @@ export default function OrderDetail() {
           ["ready", "picked_up"].includes(order.status) && (
             <div className="mt-4 overflow-hidden rounded-2xl ring-1 ring-border">
               <iframe
-                title="Mapa de Milagro"
+                title={liveLocation.data && !liveLocation.data.stale ? "Ubicación GPS del repartidor" : "Mapa del local"}
                 className="h-48 w-full"
-                src={`https://www.openstreetmap.org/export/embed.html?bbox=${MILAGRO.lng - 0.02}%2C${MILAGRO.lat - 0.015}%2C${MILAGRO.lng + 0.02}%2C${MILAGRO.lat + 0.015}&layer=mapnik&marker=${business?.lat ?? MILAGRO.lat}%2C${business?.lng ?? MILAGRO.lng}`}
+                src={`https://www.openstreetmap.org/export/embed.html?bbox=${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng) - 0.015}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat) - 0.012}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng) + 0.015}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat) + 0.012}&layer=mapnik&marker=${liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat}%2C${liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng}`}
               />
               <p className="bg-secondary px-3 py-2 text-[11px] font-bold text-muted-foreground">
-                📍 El punto marca el local. El seguimiento GPS del repartidor en
-                vivo llega en la siguiente versión.
+                {liveLocation.data && !liveLocation.data.stale
+                  ? `🛵 GPS del repartidor actualizado ${new Date(liveLocation.data.updatedAt).toLocaleTimeString()}. El mapa se refresca automáticamente.`
+                  : liveLocation.data?.stale
+                    ? "⚠️ La última ubicación está desactualizada. Mostramos el local hasta recibir una nueva señal GPS."
+                    : "📍 Mostramos el local. La ubicación del repartidor aparecerá cuando active el GPS durante la entrega."}
               </p>
             </div>
           )}
