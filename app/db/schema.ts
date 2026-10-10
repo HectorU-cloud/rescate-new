@@ -5,6 +5,7 @@ import {
   bigint,
   varchar,
   text,
+  mediumtext,
   timestamp,
   boolean,
   int,
@@ -75,6 +76,8 @@ export const products = mysqlTable(
       .notNull(),
     name: varchar("name", { length: 150 }).notNull(),
     description: varchar("description", { length: 300 }),
+    // Imagen comprimida en data URL para MVP. Migrar a object storage al escalar.
+    imageUrl: mediumtext("imageUrl"),
     price: double("price").notNull(),
     emoji: varchar("emoji", { length: 8 }).default("🍽️").notNull(),
     isAvailable: boolean("isAvailable").default(true).notNull(),

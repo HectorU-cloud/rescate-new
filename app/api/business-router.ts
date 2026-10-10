@@ -165,11 +165,15 @@ export const businessRouter = createRouter({
         id: z.number().optional(),
         name: z.string().min(2).max(150),
         description: z.string().max(300).optional(),
+        imageUrl: z.string().max(500_000).optional().nullable(),
         price: z.number().min(0.1).max(500),
         emoji: z.string().max(8).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.imageUrl && !/^data:image\/(jpeg|png|webp);base64,/.test(input.imageUrl) && !/^https:\/\//.test(input.imageUrl)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "La imagen debe ser JPG, PNG, WebP o una URL HTTPS." });
+      }
       const biz = await requireMyBusiness(ctx.user.id);
       const db = getDb();
       if (input.id) {
@@ -178,6 +182,7 @@ export const businessRouter = createRouter({
           .set({
             name: input.name,
             description: input.description ?? null,
+            imageUrl: input.imageUrl ?? null,
             price: input.price,
             emoji: input.emoji ?? "🍽️",
           })
@@ -192,6 +197,7 @@ export const businessRouter = createRouter({
           businessId: biz.id,
           name: input.name,
           description: input.description ?? null,
+          imageUrl: input.imageUrl ?? null,
           price: input.price,
           emoji: input.emoji ?? "🍽️",
         })

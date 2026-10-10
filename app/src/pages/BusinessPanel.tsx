@@ -372,16 +372,44 @@ function OrdersTab({ businessId }: { businessId: number }) {
 // ---------------------------------------------------------------------------
 // Menú (productos)
 // ---------------------------------------------------------------------------
+async function compressProductImage(file: File): Promise<string> {
+  if (!file.type.startsWith("image/")) throw new Error("Selecciona un archivo de imagen.");
+  if (file.size > 10 * 1024 * 1024) throw new Error("La imagen debe pesar menos de 10 MB.");
+  const source = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("No se pudo leer la imagen."));
+      img.src = source;
+    });
+    const scale = Math.min(1, 900 / Math.max(image.width, image.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("No se pudo procesar la imagen.");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    let result = canvas.toDataURL("image/jpeg", 0.68);
+    if (result.length > 450_000) result = canvas.toDataURL("image/jpeg", 0.48);
+    if (result.length > 500_000) throw new Error("La imagen sigue siendo muy pesada. Prueba con otra foto.");
+    return result;
+  } finally {
+    URL.revokeObjectURL(source);
+  }
+}
+
 function MenuTab() {
   const utils = trpc.useUtils();
   const list = trpc.business.products.useQuery();
-  const [form, setForm] = useState({ name: "", price: "", emoji: "🍽️", description: "" });
+  const [form, setForm] = useState({ name: "", price: "", emoji: "🍽️", description: "", imageUrl: "" });
+  const [imageBusy, setImageBusy] = useState(false);
   const add = trpc.business.upsertProduct.useMutation({
     onSuccess: () => {
-      setForm({ name: "", price: "", emoji: "🍽️", description: "" });
+      setForm({ name: "", price: "", emoji: "🍽️", description: "", imageUrl: "" });
       utils.business.products.invalidate();
       utils.catalog.invalidate();
-      toast.success("Producto agregado");
+      toast.success("Producto agregado al menú");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -394,9 +422,9 @@ function MenuTab() {
 
   return (
     <div className="space-y-3">
-      <div className="space-y-2 rounded-3xl bg-card p-4 ring-1 ring-border">
+      <div className="space-y-3 rounded-3xl bg-card p-4 ring-1 ring-border">
         <p className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
-          Agregar producto
+          Agregar producto al menú
         </p>
         <div className="flex gap-2">
           <input
@@ -404,58 +432,95 @@ function MenuTab() {
             onChange={(e) => setForm((f) => ({ ...f, emoji: e.target.value }))}
             className="w-16 rounded-xl border border-input bg-background px-3 py-2.5 text-center text-lg"
             maxLength={4}
+            aria-label="Emoji del producto"
           />
           <input
             value={form.name}
             onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            placeholder="Nombre"
+            placeholder="Nombre (ej. Hamburguesa clásica)"
             className="w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-semibold outline-none"
+            maxLength={150}
           />
           <input
             value={form.price}
             onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
             placeholder="$0.00"
             type="number"
-            min={0}
+            min={0.1}
             step={0.25}
             className="w-24 rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-semibold outline-none"
           />
         </div>
+        <textarea
+          value={form.description}
+          onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+          placeholder="Descripción e ingredientes (ej. pan, carne, queso, lechuga, tomate y salsa de la casa). Indica alérgenos si aplica."
+          maxLength={300}
+          rows={3}
+          className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none"
+        />
+        <div className="space-y-2 rounded-2xl border border-dashed border-input p-3">
+          <label className="block text-sm font-bold">Foto del plato (opcional)</label>
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            disabled={imageBusy}
+            onChange={async (e) => {
+              const file = e.currentTarget.files?.[0];
+              e.currentTarget.value = "";
+              if (!file) return;
+              setImageBusy(true);
+              try {
+                const imageUrl = await compressProductImage(file);
+                setForm((f) => ({ ...f, imageUrl }));
+                toast.success("Foto lista para publicar");
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "No se pudo cargar la foto");
+              } finally {
+                setImageBusy(false);
+              }
+            }}
+            className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-2 file:font-bold"
+          />
+          <p className="text-xs text-muted-foreground">JPG, PNG o WebP. La foto se optimiza automáticamente antes de guardarse.</p>
+          {imageBusy && <p className="text-sm font-semibold text-muted-foreground">Optimizando foto…</p>}
+          {form.imageUrl && (
+            <div className="flex items-center gap-3">
+              <img src={form.imageUrl} alt="Vista previa del plato" className="h-20 w-24 rounded-xl object-cover" />
+              <button type="button" onClick={() => setForm((f) => ({ ...f, imageUrl: "" }))} className="text-sm font-bold text-destructive">Quitar foto</button>
+            </div>
+          )}
+        </div>
         <button
-          disabled={add.isPending || form.name.length < 2 || Number(form.price) <= 0}
-          onClick={() =>
-            add.mutate({
-              name: form.name,
-              price: Number(form.price),
-              emoji: form.emoji,
-              description: form.description || undefined,
-            })
-          }
+          disabled={add.isPending || imageBusy || form.name.trim().length < 2 || Number(form.price) <= 0}
+          onClick={() => add.mutate({
+            name: form.name.trim(),
+            price: Number(form.price),
+            emoji: form.emoji,
+            description: form.description.trim() || undefined,
+            imageUrl: form.imageUrl || undefined,
+          })}
           className="w-full rounded-xl bg-foreground py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
         >
-          + Agregar al menú
+          {add.isPending ? "Publicando…" : "+ Agregar al menú"}
         </button>
       </div>
 
       {(list.data ?? []).map((p) => (
-        <div
-          key={p.id}
-          className="flex items-center gap-3 rounded-2xl bg-card p-3 ring-1 ring-border"
-        >
-          <span className="grid h-11 w-11 place-items-center rounded-xl bg-secondary text-2xl">
-            {p.emoji}
-          </span>
+        <div key={p.id} className="flex items-center gap-3 rounded-2xl bg-card p-3 ring-1 ring-border">
+          {p.imageUrl ? (
+            <img src={p.imageUrl} alt={p.name} className="h-14 w-14 shrink-0 rounded-xl object-cover" />
+          ) : (
+            <span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-secondary text-2xl">{p.emoji}</span>
+          )}
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-extrabold">{p.name}</p>
             <p className="text-xs font-bold text-muted-foreground">{money(p.price)}</p>
+            {p.description && <p className="line-clamp-2 text-xs text-muted-foreground">{p.description}</p>}
           </div>
           <button
             onClick={() => toggle.mutate({ id: p.id, isAvailable: !p.isAvailable })}
-            className={`rounded-full px-3 py-1.5 text-[11px] font-extrabold ${
-              p.isAvailable
-                ? "bg-brand-soft text-brand-dark"
-                : "bg-secondary text-muted-foreground"
-            }`}
+            className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-extrabold ${p.isAvailable ? "bg-brand-soft text-brand-dark" : "bg-secondary text-muted-foreground"}`}
           >
             {p.isAvailable ? "Disponible" : "Agotado"}
           </button>

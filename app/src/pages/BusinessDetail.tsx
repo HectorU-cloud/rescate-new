@@ -128,13 +128,17 @@ export default function BusinessDetail() {
               key={p.id}
               className="flex items-center gap-3 rounded-2xl bg-card p-3 shadow-sm ring-1 ring-border"
             >
-              <div className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-secondary text-3xl">
-                {p.emoji}
-              </div>
+              {p.imageUrl ? (
+                <img src={p.imageUrl} alt={p.name} loading="lazy" className="h-16 w-16 shrink-0 rounded-xl object-cover" />
+              ) : (
+                <div className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-secondary text-3xl">
+                  {p.emoji}
+                </div>
+              )}
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-extrabold">{p.name}</p>
                 {p.description && (
-                  <p className="line-clamp-1 text-xs text-muted-foreground">
+                  <p className="line-clamp-2 text-xs text-muted-foreground">
                     {p.description}
                   </p>
                 )}
