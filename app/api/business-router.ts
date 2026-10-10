@@ -2,6 +2,7 @@ import { z } from "zod";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
+import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
 import {
   businesses,
@@ -119,7 +120,7 @@ export const businessRouter = createRouter({
     }),
 
   updateOrderStatus: authedQuery
-    .input(z.object({ orderId: z.number(), status: z.string() }))
+    .input(z.object({ orderId: z.number().int().positive(), status: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
       const db = getDb();
@@ -138,6 +139,11 @@ export const businessRouter = createRouter({
           code: "BAD_REQUEST",
           message: `No puedes pasar de "${order.status}" a "${next}"`,
         });
+      }
+      if (next === "cancelled") {
+        // Si era un rescate, devuelve el stock del pack
+        await cancelOrderAndRestock(order.id, ["pending", "accepted"]);
+        return { ok: true };
       }
       await db.update(orders).set({ status: next }).where(eq(orders.id, order.id));
       return { ok: true };

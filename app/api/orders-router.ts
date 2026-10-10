@@ -1,7 +1,10 @@
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { customAlphabet } from "nanoid";
+import { randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
+import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
 import {
   businesses,
@@ -11,13 +14,16 @@ import {
   rescuePacks,
 } from "@db/schema";
 
+// 6 caracteres sin ambiguos (0/O, 1/I): ~887 millones de combinaciones
+const codeSuffix = customAlphabet("23456789ABCDEFGHJKLMNPQRSTUVWXYZ", 6);
+
 function makeCode(prefix: string) {
-  const n = Math.floor(1000 + Math.random() * 9000);
-  return `${prefix}-${n}`;
+  return `${prefix}-${codeSuffix()}`;
 }
 
+// Código de retiro de 6 dígitos con aleatoriedad criptográfica
 function makePickupCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(randomInt(100000, 1000000));
 }
 
 async function loadOrderWithRelations(orderId: number) {
@@ -41,10 +47,16 @@ export const ordersRouter = createRouter({
   createDelivery: authedQuery
     .input(
       z.object({
-        businessId: z.number(),
+        businessId: z.number().int().positive(),
         items: z
-          .array(z.object({ productId: z.number(), quantity: z.number().min(1) }))
-          .min(1),
+          .array(
+            z.object({
+              productId: z.number().int().positive(),
+              quantity: z.number().int().min(1).max(50),
+            }),
+          )
+          .min(1)
+          .max(50),
         deliveryAddress: z.string().min(5).max(300),
         notes: z.string().max(300).optional(),
         customerPhone: z.string().max(30).optional(),
@@ -109,8 +121,8 @@ export const ordersRouter = createRouter({
   createRescue: authedQuery
     .input(
       z.object({
-        rescuePackId: z.number(),
-        quantity: z.number().min(1).max(5),
+        rescuePackId: z.number().int().positive(),
+        quantity: z.number().int().min(1).max(5),
         customerPhone: z.string().max(30).optional(),
       }),
     )
@@ -126,10 +138,21 @@ export const ordersRouter = createRouter({
       const total = pack.rescuePrice * input.quantity;
 
       const orderId = await db.transaction(async (tx) => {
-        await tx
+        // Descuento atómico: solo resta si todavía queda stock suficiente.
+        // Evita que dos clientes a la vez se lleven el mismo último pack.
+        const [stock] = await tx
           .update(rescuePacks)
-          .set({ quantityLeft: pack.quantityLeft - input.quantity })
-          .where(eq(rescuePacks.id, pack.id));
+          .set({ quantityLeft: sql`${rescuePacks.quantityLeft} - ${input.quantity}` })
+          .where(
+            and(
+              eq(rescuePacks.id, pack.id),
+              eq(rescuePacks.isActive, true),
+              gte(rescuePacks.quantityLeft, input.quantity),
+            ),
+          );
+        if (stock.affectedRows === 0) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Este pack ya no está disponible" });
+        }
         const [{ id }] = await tx
           .insert(orders)
           .values({
@@ -173,7 +196,7 @@ export const ordersRouter = createRouter({
   }),
 
   byId: authedQuery
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.number().int().positive() }))
     .query(async ({ ctx, input }) => {
       const data = await loadOrderWithRelations(input.id);
       if (!data) return null;
@@ -195,7 +218,7 @@ export const ordersRouter = createRouter({
     }),
 
   cancel: authedQuery
-    .input(z.object({ id: z.number() }))
+    .input(z.object({ id: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const order = await db.query.orders.findFirst({
@@ -207,27 +230,7 @@ export const ordersRouter = createRouter({
       if (!["pending", "accepted"].includes(order.status)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Ya no se puede cancelar" });
       }
-      await db.transaction(async (tx) => {
-        await tx.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
-        // Si era rescate, devolver el stock del pack
-        if (order.type === "rescue") {
-          const [item] = await tx
-            .select()
-            .from(orderItems)
-            .where(eq(orderItems.orderId, order.id));
-          if (item?.rescuePackId) {
-            const pack = await tx.query.rescuePacks.findFirst({
-              where: eq(rescuePacks.id, item.rescuePackId),
-            });
-            if (pack) {
-              await tx
-                .update(rescuePacks)
-                .set({ quantityLeft: pack.quantityLeft + item.quantity })
-                .where(eq(rescuePacks.id, pack.id));
-            }
-          }
-        }
-      });
+      await cancelOrderAndRestock(order.id, ["pending", "accepted"]);
       return { ok: true };
     }),
 });

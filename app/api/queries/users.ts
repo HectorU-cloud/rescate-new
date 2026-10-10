@@ -20,11 +20,10 @@ export async function upsertUser(data: InsertUser) {
     ...data,
   };
 
-  if (
-    values.role === undefined &&
-    values.unionId &&
-    values.unionId === env.ownerUnionId
-  ) {
+  const isOwner =
+    (!!env.ownerUnionId && values.unionId === env.ownerUnionId) ||
+    (!!env.ownerEmail && values.email?.toLowerCase() === env.ownerEmail);
+  if (values.role === undefined && isOwner) {
     values.role = "admin";
     updateSet.role = "admin";
   }

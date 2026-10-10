@@ -5,13 +5,19 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
-import { createOAuthCallbackHandler } from "./kimi/auth";
+import { googleCallbackHandler, googleLoginHandler } from "./auth/google";
+import { devLoginHandler } from "./auth/dev-login";
 import { Paths } from "@contracts/constants";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
-app.get(Paths.oauthCallback, createOAuthCallbackHandler());
+app.get(Paths.googleLogin, googleLoginHandler());
+app.get(Paths.googleCallback, googleCallbackHandler());
+if (env.devLogin) {
+  console.warn("[auth] DEV_LOGIN activo: /api/dev-login habilitado (solo desarrollo)");
+  app.get("/api/dev-login", devLoginHandler());
+}
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
     endpoint: "/api/trpc",
