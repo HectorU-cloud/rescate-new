@@ -99,6 +99,8 @@ export const rescuePacks = mysqlTable(
       .notNull(),
     title: varchar("title", { length: 150 }).notNull(),
     description: varchar("description", { length: 300 }),
+    // MVP: imagen comprimida; usar object storage para producción.
+    imageUrl: mediumtext("imageUrl"),
     originalPrice: double("originalPrice").notNull(),
     rescuePrice: double("rescuePrice").notNull(),
     quantityTotal: int("quantityTotal").notNull(),

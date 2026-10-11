@@ -1,18 +1,19 @@
 # Fotos y descripciones del menú
 
 ## Funcionalidad
-- El comercio puede seleccionar una foto JPG, PNG o WebP al crear un producto.
-- El navegador reduce la imagen a un máximo de 900 px y la comprime antes de enviarla.
-- Se puede añadir una descripción de hasta 300 caracteres con ingredientes y alérgenos.
-- La foto y la descripción aparecen en la lista del menú que ve el cliente.
-- La foto es opcional; si no se carga, se conserva el emoji de respaldo.
+- El comercio puede añadir o editar un producto del menú.
+- Puede añadir una descripción con ingredientes y posibles alérgenos (hasta 300 caracteres).
+- Puede elegir, previsualizar, reemplazar o quitar la fotografía.
+- Las imágenes JPG, PNG o WebP se reducen en el navegador a un máximo de 900 px y se comprimen a JPEG.
+- Si no existe foto, se conserva el emoji como respaldo.
+- Los packs de rescate también admiten foto y se muestran en el panel del negocio, las tarjetas públicas y el detalle del local.
 
-## Aplicar el cambio
+## Aplicar
 1. Haz copia de seguridad de la base de datos.
-2. En la carpeta `app`, configura el `.env` de desarrollo.
-3. Ejecuta `npm install` si es necesario.
-4. Ejecuta `npm run db:push` para añadir `products.imageUrl`.
+2. Configura `.env` en la carpeta `app`.
+3. Ejecuta `npm install`.
+4. Ejecuta `npm run db:push` para agregar `rescue_packs.imageUrl`.
 5. Ejecuta `npm run check` y `npm run build`.
 
-## Nota de arquitectura
-Para que esta primera versión funcione sin configurar un proveedor externo, la imagen optimizada se guarda como data URL en una columna `MEDIUMTEXT`. Es apropiado para probar un MVP con pocas fotos, pero aumenta el tamaño de la base de datos y de las respuestas del catálogo. Antes de producción con muchos comercios, se recomienda migrar a almacenamiento de objetos (S3 compatible) y guardar en MySQL solo la URL pública o firmada. No se debe guardar la imagen original sin comprimir.
+## Almacenamiento
+En esta versión las imágenes comprimidas se guardan en `MEDIUMTEXT` en MySQL. Es apropiado para validar un MVP pequeño, pero para producción con muchos comercios se recomienda migrar a S3/R2. Consulta `IMAGENES_Y_EDICION.md`; esa guía describe la arquitectura y los pasos de migración. El almacenamiento S3/R2 no está activado en esta versión.

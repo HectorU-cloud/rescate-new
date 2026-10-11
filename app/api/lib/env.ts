@@ -24,6 +24,13 @@ export const env = {
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
   // Login falso solo para desarrollo. Nunca activo en producción.
   devLogin: process.env.DEV_LOGIN === "true" && !isProduction,
+  // Almacenamiento compatible con S3 (AWS S3 o Cloudflare R2).
+  s3Bucket: process.env.S3_BUCKET ?? "",
+  s3Region: process.env.S3_REGION || "auto",
+  s3Endpoint: process.env.S3_ENDPOINT ?? "",
+  s3AccessKeyId: process.env.S3_ACCESS_KEY_ID ?? "",
+  s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "",
+  s3PublicUrl: (process.env.S3_PUBLIC_URL ?? "").replace(/\/$/, ""),
 };
 
 if (!env.appSecret || (isProduction && env.appSecret.length < 32)) {

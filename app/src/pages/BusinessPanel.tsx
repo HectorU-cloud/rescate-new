@@ -399,17 +399,45 @@ async function compressProductImage(file: File): Promise<string> {
   }
 }
 
+type ImageUploadInput = {
+  contentType: "image/jpeg";
+  kind: "product" | "rescue-pack";
+};
+type ImageUploadResult = { uploadUrl: string; imageUrl: string };
+
+async function uploadCompressedImage(
+  dataUrl: string,
+  kind: ImageUploadInput["kind"],
+  createUpload: (input: ImageUploadInput) => Promise<ImageUploadResult>,
+): Promise<string> {
+  const blob = await fetch(dataUrl).then((response) => response.blob());
+  if (blob.type !== "image/jpeg") throw new Error("La imagen optimizada no tiene un formato válido.");
+  const target = await createUpload({ contentType: "image/jpeg", kind });
+  const response = await fetch(target.uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": "image/jpeg" },
+    body: blob,
+  });
+  if (!response.ok) throw new Error("No se pudo guardar la imagen en el almacenamiento. Revisa el bucket y su configuración CORS.");
+  return target.imageUrl;
+}
+
 function MenuTab() {
   const utils = trpc.useUtils();
   const list = trpc.business.products.useQuery();
-  const [form, setForm] = useState({ name: "", price: "", emoji: "🍽️", description: "", imageUrl: "" });
+  const createImageUpload = trpc.business.createImageUpload.useMutation();
+  const emptyForm = { name: "", price: "", emoji: "🍽️", description: "", imageUrl: "" };
+  const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [imageBusy, setImageBusy] = useState(false);
   const add = trpc.business.upsertProduct.useMutation({
     onSuccess: () => {
-      setForm({ name: "", price: "", emoji: "🍽️", description: "", imageUrl: "" });
+      setForm(emptyForm);
+      const wasEditing = editingId !== null;
+      setEditingId(null);
       utils.business.products.invalidate();
       utils.catalog.invalidate();
-      toast.success("Producto agregado al menú");
+      toast.success(wasEditing ? "Producto actualizado" : "Producto agregado al menú");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -424,7 +452,7 @@ function MenuTab() {
     <div className="space-y-3">
       <div className="space-y-3 rounded-3xl bg-card p-4 ring-1 ring-border">
         <p className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
-          Agregar producto al menú
+          {editingId !== null ? "Editar producto del menú" : "Agregar producto al menú"}
         </p>
         <div className="flex gap-2">
           <input
@@ -471,9 +499,10 @@ function MenuTab() {
               if (!file) return;
               setImageBusy(true);
               try {
-                const imageUrl = await compressProductImage(file);
+                const compressed = await compressProductImage(file);
+                const imageUrl = await uploadCompressedImage(compressed, "product", createImageUpload.mutateAsync);
                 setForm((f) => ({ ...f, imageUrl }));
-                toast.success("Foto lista para publicar");
+                toast.success("Foto subida al almacenamiento y lista para publicar");
               } catch (error) {
                 toast.error(error instanceof Error ? error.message : "No se pudo cargar la foto");
               } finally {
@@ -482,7 +511,7 @@ function MenuTab() {
             }}
             className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-2 file:font-bold"
           />
-          <p className="text-xs text-muted-foreground">JPG, PNG o WebP. La foto se optimiza automáticamente antes de guardarse.</p>
+          <p className="text-xs text-muted-foreground">JPG, PNG o WebP. Se optimiza en el navegador y se sube al almacenamiento externo.</p>
           {imageBusy && <p className="text-sm font-semibold text-muted-foreground">Optimizando foto…</p>}
           {form.imageUrl && (
             <div className="flex items-center gap-3">
@@ -494,6 +523,7 @@ function MenuTab() {
         <button
           disabled={add.isPending || imageBusy || form.name.trim().length < 2 || Number(form.price) <= 0}
           onClick={() => add.mutate({
+            ...(editingId !== null ? { id: editingId } : {}),
             name: form.name.trim(),
             price: Number(form.price),
             emoji: form.emoji,
@@ -502,8 +532,11 @@ function MenuTab() {
           })}
           className="w-full rounded-xl bg-foreground py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
         >
-          {add.isPending ? "Publicando…" : "+ Agregar al menú"}
+          {add.isPending ? "Guardando…" : editingId !== null ? "Guardar cambios" : "+ Agregar al menú"}
         </button>
+        {editingId !== null && (
+          <button type="button" onClick={() => { setEditingId(null); setForm(emptyForm); }} className="w-full rounded-xl border border-input py-2 text-sm font-bold">Cancelar edición</button>
+        )}
       </div>
 
       {(list.data ?? []).map((p) => (
@@ -518,6 +551,16 @@ function MenuTab() {
             <p className="text-xs font-bold text-muted-foreground">{money(p.price)}</p>
             {p.description && <p className="line-clamp-2 text-xs text-muted-foreground">{p.description}</p>}
           </div>
+          <button
+            onClick={() => {
+              setEditingId(p.id);
+              setForm({ name: p.name, price: String(p.price), emoji: p.emoji, description: p.description ?? "", imageUrl: p.imageUrl ?? "" });
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+            className="shrink-0 rounded-full border border-input px-3 py-1.5 text-[11px] font-extrabold"
+          >
+            Editar
+          </button>
           <button
             onClick={() => toggle.mutate({ id: p.id, isAvailable: !p.isAvailable })}
             className={`shrink-0 rounded-full px-3 py-1.5 text-[11px] font-extrabold ${p.isAvailable ? "bg-brand-soft text-brand-dark" : "bg-secondary text-muted-foreground"}`}
@@ -536,18 +579,21 @@ function MenuTab() {
 function RescueTab() {
   const utils = trpc.useUtils();
   const list = trpc.business.rescuePacks.useQuery();
+  const createImageUpload = trpc.business.createImageUpload.useMutation();
   const [form, setForm] = useState({
     title: "",
     description: "",
+    imageUrl: "",
     originalPrice: "",
     rescuePrice: "",
     quantityTotal: "5",
     pickupStart: "19:00",
     pickupEnd: "20:30",
   });
+  const [imageBusy, setImageBusy] = useState(false);
   const add = trpc.business.createRescuePack.useMutation({
     onSuccess: () => {
-      setForm({ ...form, title: "", description: "", originalPrice: "", rescuePrice: "" });
+      setForm((f) => ({ ...f, title: "", description: "", imageUrl: "", originalPrice: "", rescuePrice: "" }));
       utils.business.rescuePacks.invalidate();
       utils.catalog.invalidate();
       toast.success("Pack publicado");
@@ -579,6 +625,20 @@ function RescueTab() {
           placeholder="Qué incluye (aprox.)"
           className="w-full rounded-xl border border-input bg-card px-3 py-2.5 text-sm font-semibold outline-none"
         />
+        <div className="space-y-2 rounded-2xl border border-dashed border-input bg-card p-3">
+          <label className="block text-sm font-bold">Foto del pack (opcional)</label>
+          <input type="file" accept="image/jpeg,image/png,image/webp" disabled={imageBusy}
+            onChange={async (e) => {
+              const file = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (!file) return;
+              setImageBusy(true);
+              try { const compressed = await compressProductImage(file); const imageUrl = await uploadCompressedImage(compressed, "rescue-pack", createImageUpload.mutateAsync); setForm((f) => ({ ...f, imageUrl })); toast.success("Foto del pack subida al almacenamiento"); }
+              catch (error) { toast.error(error instanceof Error ? error.message : "No se pudo cargar la foto"); }
+              finally { setImageBusy(false); }
+            }} className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-secondary file:px-3 file:py-2 file:font-bold" />
+          {imageBusy && <p className="text-xs text-muted-foreground">Optimizando foto…</p>}
+          {form.imageUrl && <div className="flex items-center gap-3"><img src={form.imageUrl} alt="Vista previa del pack" className="h-20 w-24 rounded-xl object-cover" /><button type="button" onClick={() => setForm((f) => ({ ...f, imageUrl: "" }))} className="text-sm font-bold text-destructive">Quitar foto</button></div>}
+          <p className="text-xs text-muted-foreground">JPG, PNG o WebP. Se optimiza y se sube al almacenamiento externo.</p>
+        </div>
         <div className="grid grid-cols-3 gap-2">
           <input
             value={form.originalPrice}
@@ -633,7 +693,7 @@ function RescueTab() {
         </div>
         <button
           disabled={
-            add.isPending ||
+            add.isPending || imageBusy ||
             form.title.length < 2 ||
             Number(form.originalPrice) <= 0 ||
             Number(form.rescuePrice) <= 0
@@ -642,6 +702,7 @@ function RescueTab() {
             add.mutate({
               title: form.title,
               description: form.description || undefined,
+              imageUrl: form.imageUrl || undefined,
               originalPrice: Number(form.originalPrice),
               rescuePrice: Number(form.rescuePrice),
               quantityTotal: Number(form.quantityTotal) || 1,
@@ -660,6 +721,7 @@ function RescueTab() {
           key={p.id}
           className="flex items-center gap-3 rounded-2xl bg-card p-3 ring-1 ring-border"
         >
+          {p.imageUrl ? <img src={p.imageUrl} alt={p.title} className="h-14 w-14 shrink-0 rounded-xl object-cover" /> : <span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-rescue-soft text-2xl">🧡</span>}
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-extrabold">{p.title}</p>
             <p className="text-xs font-bold text-muted-foreground">

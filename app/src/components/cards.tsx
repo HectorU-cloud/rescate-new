@@ -51,8 +51,8 @@ export function RescueCard({
   );
   const inner = (
     <div className="group relative flex gap-3 overflow-hidden rounded-3xl bg-card p-3 shadow-sm ring-1 ring-border">
-      <div className="grid h-20 w-20 shrink-0 place-items-center rounded-2xl bg-rescue-soft text-4xl">
-        {business?.emoji ?? "🎁"}
+      <div className="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-rescue-soft">
+        {pack.imageUrl ? <img src={pack.imageUrl} alt={pack.title} loading="lazy" className="h-full w-full object-cover" /> : <div className="grid h-full w-full place-items-center text-4xl">{business?.emoji ?? "🎁"}</div>}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">

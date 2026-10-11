@@ -196,6 +196,7 @@ export default function BusinessDetail() {
                   Quedan {pack.quantityLeft} · retiro hoy {pack.pickupStart}–
                   {pack.pickupEnd}
                 </div>
+                {pack.imageUrl && <img src={pack.imageUrl} alt={pack.title} loading="lazy" className="h-44 w-full object-cover" />}
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-2">
                     <div>

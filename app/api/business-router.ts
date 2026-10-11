@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
+import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
 import {
   businesses,
   orderItems,
@@ -35,6 +36,20 @@ const BUSINESS_NEXT: Record<string, OrderStatus[]> = {
 };
 
 export const businessRouter = createRouter({
+  // URL prefirmada para subir una imagen directamente a S3/R2 sin enviar Base64 al backend.
+  createImageUpload: authedQuery
+    .input(z.object({
+      contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
+      kind: z.enum(["product", "rescue-pack"]),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      return createImageUploadUrl({
+        businessId: biz.id,
+        contentType: input.contentType as SupportedImageMime,
+        kind: input.kind,
+      });
+    }),
   myBusiness: authedQuery.query(async ({ ctx }) => {
     return (
       (await getDb().query.businesses.findFirst({
@@ -231,6 +246,7 @@ export const businessRouter = createRouter({
       z.object({
         title: z.string().min(2).max(150),
         description: z.string().max(300).optional(),
+        imageUrl: z.string().max(500_000).optional().nullable(),
         originalPrice: z.number().min(0.5).max(500),
         rescuePrice: z.number().min(0.25).max(500),
         quantityTotal: z.number().min(1).max(100),
@@ -240,6 +256,9 @@ export const businessRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
+      if (input.imageUrl && !/^data:image\/(jpeg|png|webp);base64,/.test(input.imageUrl) && !/^https:\/\//.test(input.imageUrl)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "La imagen debe ser JPG, PNG, WebP o una URL HTTPS." });
+      }
       if (input.rescuePrice >= input.originalPrice) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -252,6 +271,7 @@ export const businessRouter = createRouter({
           businessId: biz.id,
           title: input.title,
           description: input.description ?? null,
+          imageUrl: input.imageUrl ?? null,
           originalPrice: input.originalPrice,
           rescuePrice: input.rescuePrice,
           quantityTotal: input.quantityTotal,
