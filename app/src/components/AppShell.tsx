@@ -3,6 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { money } from "@/lib/format";
+import { toast } from "sonner";
 
 function Logo() {
   return (
@@ -62,6 +63,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       navigate("/bienvenida", { replace: true });
     }
   }, [user, location.pathname, navigate]);
+
+  useEffect(() => {
+    const onPush = (event: Event) => {
+      const payload = (event as CustomEvent<{ notification?: { title?: string; body?: string } }>).detail;
+      toast.info(payload?.notification?.title ?? "Actualización de Rescate", { description: payload?.notification?.body });
+    };
+    window.addEventListener("rescate:push", onPush);
+    return () => window.removeEventListener("rescate:push", onPush);
+  }, []);
 
   return (
     <div className="min-h-dvh bg-background">

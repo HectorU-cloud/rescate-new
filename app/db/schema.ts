@@ -206,3 +206,19 @@ export const courierLocations = mysqlTable("courier_locations", {
 });
 
 export type CourierLocation = typeof courierLocations.$inferSelect;
+
+// Dispositivos autorizados para recibir notificaciones push. Un token puede renovarse.
+export const pushTokens = mysqlTable(
+  "push_tokens",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    token: varchar("token", { length: 700 }).notNull().unique(),
+    platform: mysqlEnum("platform", ["web", "android", "ios"]).default("web").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+  },
+  (t) => ({ userIdx: index("push_user_idx").on(t.userId) }),
+);
+
+export type PushToken = typeof pushTokens.$inferSelect;

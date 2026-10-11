@@ -3,6 +3,7 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
+import { notifyOrderStatus } from "./lib/push-notifications";
 import { businesses, courierLocations, orderItems, orders } from "@db/schema";
 
 export const courierRouter = createRouter({
@@ -75,7 +76,8 @@ export const courierRouter = createRouter({
       await db
         .update(orders)
         .set({ courierId: ctx.user.id, status: "picked_up" })
-        .where(eq(orders.id, order.id));
+        .where(and(eq(orders.id, order.id), eq(orders.status, "ready"), isNull(orders.courierId)));
+      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "picked_up", type: order.type });
       return { ok: true };
     }),
 
@@ -124,6 +126,7 @@ export const courierRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes entregar este pedido" });
       }
       await db.update(orders).set({ status: "delivered" }).where(eq(orders.id, order.id));
+      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "delivered", type: order.type });
       // Eliminar la posición al cerrar la entrega para no conservar datos de ubicación innecesarios.
       await db.delete(courierLocations).where(eq(courierLocations.orderId, order.id));
       return { ok: true };

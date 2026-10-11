@@ -46,3 +46,10 @@ npm run build && NODE_ENV=production npm start
 ```
 
 En producción `APP_SECRET`, `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `APP_URL` son obligatorios y la app debe servirse por **HTTPS** (la cookie de sesión es `Secure`).
+
+
+## Funciones recientes
+
+- GPS de repartidor: consulta `GPS_EN_VIVO.md`.
+- Fotografías, edición de productos y almacenamiento S3/R2: consulta `IMAGENES_Y_EDICION.md`.
+- Notificaciones push web con Firebase Cloud Messaging: consulta `NOTIFICACIONES_PUSH.md`.

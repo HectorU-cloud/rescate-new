@@ -5,6 +5,7 @@ import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
 import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
+import { notifyOrderStatus } from "./lib/push-notifications";
 import {
   businesses,
   orderItems,
@@ -158,9 +159,11 @@ export const businessRouter = createRouter({
       if (next === "cancelled") {
         // Si era un rescate, devuelve el stock del pack
         await cancelOrderAndRestock(order.id, ["pending", "accepted"]);
+        await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "cancelled", type: order.type });
         return { ok: true };
       }
       await db.update(orders).set({ status: next }).where(eq(orders.id, order.id));
+      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: next, type: order.type });
       return { ok: true };
     }),
 

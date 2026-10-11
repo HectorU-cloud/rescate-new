@@ -5,6 +5,7 @@ import { randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
+import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
 import { getDb } from "./queries/connection";
 import {
   businesses,
@@ -115,7 +116,12 @@ export const ordersRouter = createRouter({
         return id;
       });
 
-      return loadOrderWithRelations(orderId);
+      const created = await loadOrderWithRelations(orderId);
+      if (created) await Promise.all([
+        notifyOrderStatus({ customerId: ctx.user.id, orderId, code: created.order.code, status: "pending", type: "delivery" }),
+        sendPushToUser(business.ownerId, { title: "Nuevo pedido 🧾", body: `Tienes un nuevo pedido ${created.order.code} de delivery.`, url: "/panel", orderId }).catch((error) => console.error("Error avisando nuevo pedido al comercio:", error)),
+      ]);
+      return created;
     }),
 
   // Rescate de un pack con descuento (retiro en el local)
@@ -180,7 +186,16 @@ export const ordersRouter = createRouter({
         return id;
       });
 
-      return loadOrderWithRelations(orderId);
+      const created = await loadOrderWithRelations(orderId);
+      if (created) {
+        const packBusiness = await db.query.businesses.findFirst({ where: eq(businesses.id, pack.businessId) });
+        const tasks: Promise<unknown>[] = [
+          notifyOrderStatus({ customerId: ctx.user.id, orderId, code: created.order.code, status: "accepted", type: "rescue" }),
+        ];
+        if (packBusiness) tasks.push(sendPushToUser(packBusiness.ownerId, { title: "Nuevo pack reservado 🧡", body: `Se reservó tu pack ${created.order.code}.`, url: "/panel", orderId }).catch((error) => console.error("Error avisando reserva al comercio:", error)));
+        await Promise.all(tasks);
+      }
+      return created;
     }),
 
   // Mis pedidos (cliente)
