@@ -24,6 +24,8 @@ export const env = {
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
   // Login falso solo para desarrollo. Nunca activo en producción.
   devLogin: process.env.DEV_LOGIN === "true" && !isProduction,
+  resendApiKey: process.env.RESEND_API_KEY ?? "",
+  authEmailFrom: process.env.AUTH_EMAIL_FROM ?? "Al Rescate <noreply@example.com>",
   // Almacenamiento compatible con S3 (AWS S3 o Cloudflare R2).
   s3Bucket: process.env.S3_BUCKET ?? "",
   s3Region: process.env.S3_REGION || "auto",

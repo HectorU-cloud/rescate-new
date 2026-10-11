@@ -7,6 +7,7 @@ import { createContext } from "./context";
 import { env } from "./lib/env";
 import { googleCallbackHandler, googleLoginHandler } from "./auth/google";
 import { devLoginHandler } from "./auth/dev-login";
+import { emailRegister, emailLogin, verifyEmail, requestPasswordReset, resetPassword } from "./auth/email";
 import { Paths } from "@contracts/constants";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -14,6 +15,11 @@ const app = new Hono<{ Bindings: HttpBindings }>();
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 app.get(Paths.googleLogin, googleLoginHandler());
 app.get(Paths.googleCallback, googleCallbackHandler());
+app.post("/api/auth/email/register", emailRegister);
+app.post("/api/auth/email/login", emailLogin);
+app.get("/api/auth/email/verify", verifyEmail);
+app.post("/api/auth/email/forgot", requestPasswordReset);
+app.post("/api/auth/email/reset", resetPassword);
 if (env.devLogin) {
   console.warn("[auth] DEV_LOGIN activo: /api/dev-login habilitado (solo desarrollo)");
   app.get("/api/dev-login", devLoginHandler());
