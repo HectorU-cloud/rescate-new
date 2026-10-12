@@ -10,6 +10,9 @@ import { getDb } from "./queries/connection";
 import {
   businesses,
   courierLocations,
+  courierReviews,
+  deliveryMessages,
+  users,
   orderItems,
   orders,
   products,
@@ -216,7 +219,7 @@ export const ordersRouter = createRouter({
     .query(async ({ ctx, input }) => {
       const db = getDb();
       const order = await db.query.orders.findFirst({ where: eq(orders.id, input.id) });
-      if (!order || order.type !== "delivery" || order.status !== "picked_up" || !order.courierId) return null;
+      if (!order || order.type !== "delivery" || !(["assigned", "arrived", "picked_up"] as string[]).includes(order.status) || !order.courierId) return null;
       const ownedBiz = await db.query.businesses.findFirst({
         where: and(eq(businesses.id, order.businessId), eq(businesses.ownerId, ctx.user.id)),
       });
@@ -227,6 +230,33 @@ export const ordersRouter = createRouter({
       // No mostrar una posición antigua como si fuera en vivo.
       if (Date.now() - new Date(location.updatedAt).getTime() > 2 * 60 * 1000) return { ...location, stale: true };
       return { ...location, stale: false };
+    }),
+
+  chatMessages: authedQuery
+    .input(z.object({ id: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      const order = await db.query.orders.findFirst({ where: eq(orders.id, input.id) });
+      if (!order || order.type !== "delivery" || !order.courierId || ![order.customerId, order.courierId].includes(ctx.user.id)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "El chat está disponible para el cliente y el repartidor asignado" });
+      }
+      const messages = await db.select().from(deliveryMessages).where(eq(deliveryMessages.orderId, order.id)).orderBy(deliveryMessages.createdAt);
+      return messages.map((m) => ({ ...m, mine: m.senderId === ctx.user.id }));
+    }),
+
+  sendChatMessage: authedQuery
+    .input(z.object({ id: z.number().int().positive(), body: z.string().trim().min(1).max(1000) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const order = await db.query.orders.findFirst({ where: eq(orders.id, input.id) });
+      if (!order || order.type !== "delivery" || !order.courierId || ![order.customerId, order.courierId].includes(ctx.user.id)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "No tienes acceso a este chat" });
+      }
+      if (["delivered", "cancelled"].includes(order.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "El chat está cerrado porque la entrega finalizó" });
+      const [created] = await db.insert(deliveryMessages).values({ orderId: order.id, senderId: ctx.user.id, body: input.body }).$returningId();
+      const recipientId = ctx.user.id === order.customerId ? order.courierId : order.customerId;
+      await sendPushToUser(recipientId, { title: "Nuevo mensaje de entrega", body: input.body.slice(0, 120), url: `/orders/${order.id}`, orderId: order.id }).catch((error) => console.error("No se pudo enviar aviso de chat:", error));
+      return { ok: true, id: created.id };
     }),
 
   byId: authedQuery
@@ -248,7 +278,14 @@ export const ordersRouter = createRouter({
       if (!allowed) {
         throw new TRPCError({ code: "FORBIDDEN", message: "No puedes ver este pedido" });
       }
-      return data;
+      let courier = null;
+      if (order.type === "delivery" && order.courierId && order.customerId === ctx.user.id) {
+        const person = await db.query.users.findFirst({ where: eq(users.id, order.courierId) });
+        const [stats] = await db.select({ rating: sql<number>`coalesce(avg(${courierReviews.rating}), 0)`, reviewCount: sql<number>`count(*)` }).from(courierReviews).where(eq(courierReviews.courierId, order.courierId));
+        const [countRow] = await db.select({ deliveries: sql<number>`count(*)` }).from(orders).where(and(eq(orders.courierId, order.courierId), eq(orders.status, "delivered")));
+        if (person) courier = { id: person.id, name: person.name, photoUrl: person.courierPhotoUrl ?? person.avatar, vehicle: person.courierVehicle, plate: person.courierPlate, bio: person.courierBio, verificationStatus: person.courierVerificationStatus, rating: Number(stats?.rating ?? 0), reviewCount: Number(stats?.reviewCount ?? 0), deliveries: Number(countRow?.deliveries ?? 0) };
+      }
+      return { ...data, courier };
     }),
 
   cancel: authedQuery

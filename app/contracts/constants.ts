@@ -38,6 +38,8 @@ export type OrderStatusKey =
   | "accepted"
   | "preparing"
   | "ready"
+  | "assigned"
+  | "arrived"
   | "picked_up"
   | "delivered"
   | "cancelled";
@@ -66,9 +68,11 @@ export const ORDER_STATUS_LABELS: Record<
     delivery: "Listo, esperando repartidor",
     rescue: "Listo, pásalo a retirar",
   },
+  assigned: { label: "Repartidor asignado", delivery: "Tu repartidor aceptó el pedido y va al comercio", rescue: "Tu pack está apartado" },
+  arrived: { label: "Repartidor en el local", delivery: "El repartidor llegó al comercio", rescue: "Tu pack está apartado" },
   picked_up: {
     label: "En camino",
-    delivery: "El repartidor va en camino",
+    delivery: "El repartidor recogió tu pedido y va hacia ti",
     rescue: "En camino",
   },
   delivered: {
@@ -85,6 +89,8 @@ export const DELIVERY_FLOW: OrderStatusKey[] = [
   "accepted",
   "preparing",
   "ready",
+  "assigned",
+  "arrived",
   "picked_up",
   "delivered",
 ];

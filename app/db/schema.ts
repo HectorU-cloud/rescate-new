@@ -25,6 +25,12 @@ export const users = mysqlTable("users", {
   // Rol dentro de la app de delivery: cliente, comercio o repartidor
   appRole: mysqlEnum("appRole", ["customer", "business", "courier"]),
   phone: varchar("phone", { length: 30 }),
+  courierPhotoUrl: text("courierPhotoUrl"),
+  courierVehicle: varchar("courierVehicle", { length: 80 }),
+  courierPlate: varchar("courierPlate", { length: 20 }),
+  courierBio: varchar("courierBio", { length: 240 }),
+  courierVerificationStatus: mysqlEnum("courierVerificationStatus", ["not_submitted", "pending", "approved", "rejected"]).default("not_submitted").notNull(),
+  courierVerificationNote: varchar("courierVerificationNote", { length: 300 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
     .defaultNow()
@@ -60,6 +66,12 @@ export const businesses = mysqlTable(
     lat: double("lat").notNull(),
     lng: double("lng").notNull(),
     phone: varchar("phone", { length: 30 }),
+  courierPhotoUrl: text("courierPhotoUrl"),
+  courierVehicle: varchar("courierVehicle", { length: 80 }),
+  courierPlate: varchar("courierPlate", { length: 20 }),
+  courierBio: varchar("courierBio", { length: 240 }),
+  courierVerificationStatus: mysqlEnum("courierVerificationStatus", ["not_submitted", "pending", "approved", "rejected"]).default("not_submitted").notNull(),
+  courierVerificationNote: varchar("courierVerificationNote", { length: 300 }),
     emoji: varchar("emoji", { length: 8 }).default("🍽️").notNull(),
     isOpen: boolean("isOpen").default(true).notNull(),
     deliveryFee: double("deliveryFee").default(1).notNull(),
@@ -151,6 +163,8 @@ export const orders = mysqlTable(
       "accepted",
       "preparing",
       "ready",
+      "assigned",
+      "arrived",
       "picked_up",
       "delivered",
       "cancelled",
@@ -233,3 +247,24 @@ export const pushTokens = mysqlTable(
 );
 
 export type PushToken = typeof pushTokens.$inferSelect;
+
+
+// Mensajes internos vinculados a un pedido; solo cliente y repartidor asignado acceden.
+export const deliveryMessages = mysqlTable("delivery_messages", {
+  id: serial("id").primaryKey(),
+  orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
+  senderId: bigint("senderId", { mode: "number", unsigned: true }).notNull(),
+  body: varchar("body", { length: 1000 }).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({ orderIdx: index("delivery_msg_order_idx").on(t.orderId), senderIdx: index("delivery_msg_sender_idx").on(t.senderId) }));
+
+// Una valoración por pedido, solo después de una entrega real.
+export const courierReviews = mysqlTable("courier_reviews", {
+  id: serial("id").primaryKey(),
+  orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull().unique(),
+  courierId: bigint("courierId", { mode: "number", unsigned: true }).notNull(),
+  customerId: bigint("customerId", { mode: "number", unsigned: true }).notNull(),
+  rating: int("rating").notNull(),
+  comment: varchar("comment", { length: 500 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, (t) => ({ courierIdx: index("courier_review_courier_idx").on(t.courierId) }));

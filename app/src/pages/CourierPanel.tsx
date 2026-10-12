@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import React, { useEffect } from "react";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
@@ -22,7 +22,23 @@ export default function CourierPanel() {
   });
   const earnings = trpc.courier.earnings.useQuery(undefined, { enabled });
   const locationUpdate = trpc.courier.updateLocation.useMutation();
-  const activeOrderIds = (mine.data ?? []).filter((d) => d.order.status === "picked_up").map((d) => d.order.id);
+  const courierProfile = trpc.courier.profile.useQuery(undefined, { enabled });
+  const [profileName, setProfileName] = React.useState("");
+  const [vehicle, setVehicle] = React.useState("");
+  const [plate, setPlate] = React.useState("");
+  const [photoUrl, setPhotoUrl] = React.useState("");
+  const [bio, setBio] = React.useState("");
+  const saveProfile = trpc.profile.updateCourierProfile.useMutation({
+    onSuccess: () => { toast.success("Perfil enviado a revisión por Rescate"); utils.courier.profile.invalidate(); utils.courier.available.invalidate(); },
+    onError: (e) => toast.error(e.message),
+  });
+  useEffect(() => {
+    if (!courierProfile.data) return;
+    setProfileName(courierProfile.data.name ?? user?.name ?? "");
+    setVehicle(courierProfile.data.vehicle ?? ""); setPlate(courierProfile.data.plate ?? "");
+    setPhotoUrl(courierProfile.data.photoUrl ?? ""); setBio(courierProfile.data.bio ?? "");
+  }, [courierProfile.data, user?.name]);
+  const activeOrderIds = (mine.data ?? []).filter((d) => ["assigned", "arrived", "picked_up"].includes(d.order.status)).map((d) => d.order.id);
   const activeOrderKey = activeOrderIds.join(",");
 
   useEffect(() => {
@@ -59,6 +75,8 @@ export default function CourierPanel() {
     },
     onError: (e) => toast.error(e.message),
   });
+  const markArrived = trpc.courier.markArrived.useMutation({ onSuccess: () => { toast.success("Llegada al comercio registrada"); utils.courier.invalidate(); utils.orders.invalidate(); }, onError: (e) => toast.error(e.message) });
+  const markPickedUp = trpc.courier.markPickedUp.useMutation({ onSuccess: () => { toast.success("Pedido recogido; el cliente ya fue avisado"); utils.courier.invalidate(); utils.orders.invalidate(); }, onError: (e) => toast.error(e.message) });
   const deliver = trpc.courier.markDelivered.useMutation({
     onSuccess: () => {
       toast.success("Entregado. ¡Buen trabajo!");
@@ -84,11 +102,28 @@ export default function CourierPanel() {
     );
   }
 
-  const active = (mine.data ?? []).filter((d) => d.order.status === "picked_up");
+  const active = (mine.data ?? []).filter((d) => ["assigned", "arrived", "picked_up"].includes(d.order.status));
   const done = (mine.data ?? []).filter((d) => d.order.status === "delivered");
 
   return (
     <div className="space-y-5">
+      {/* Perfil público y estado de verificación */}
+      <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border space-y-3">
+        <div className="flex items-center gap-3">
+          {courierProfile.data?.photoUrl ? <img src={courierProfile.data.photoUrl} alt="Foto del repartidor" className="h-16 w-16 rounded-2xl object-cover" /> : <span className="grid h-16 w-16 place-items-center rounded-2xl bg-secondary text-2xl">🛵</span>}
+          <div className="flex-1"><h2 className="font-display text-lg font-extrabold">Tu perfil público</h2><p className="text-xs text-muted-foreground">{courierProfile.data?.deliveries ?? 0} entregas · {courierProfile.data?.reviewCount ? `${courierProfile.data.rating.toFixed(1)} ★ (${courierProfile.data.reviewCount})` : "Sin calificaciones aún"}</p></div>
+        </div>
+        <p className="rounded-xl bg-secondary px-3 py-2 text-xs font-bold">{courierProfile.data?.verificationStatus === "approved" ? "✅ Perfil verificado por Rescate" : courierProfile.data?.verificationStatus === "pending" ? "🕒 Perfil pendiente de revisión; aún no puedes tomar pedidos" : courierProfile.data?.verificationStatus === "rejected" ? `⚠️ Perfil rechazado: ${courierProfile.data?.verificationNote ?? "revisa los datos y vuelve a enviar"}` : "Completa tus datos y envíalos para revisión manual."}</p>
+        <form className="grid gap-2 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); saveProfile.mutate({ name: profileName, vehicle, plate, photoUrl: photoUrl || undefined, bio: bio || undefined }); }}>
+          <input value={profileName} onChange={(e) => setProfileName(e.target.value)} placeholder="Nombre visible" required minLength={2} maxLength={255} className="rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+          <input value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="Vehículo (ej. moto negra)" required minLength={2} maxLength={80} className="rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+          <input value={plate} onChange={(e) => setPlate(e.target.value)} placeholder="Placa (opcional)" maxLength={20} className="rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+          <input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} placeholder="URL de foto (opcional)" maxLength={2000} className="rounded-xl border border-border bg-background px-3 py-2 text-sm" />
+          <textarea value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Breve presentación (opcional)" maxLength={240} className="rounded-xl border border-border bg-background px-3 py-2 text-sm sm:col-span-2" />
+          <button disabled={saveProfile.isPending} className="rounded-xl bg-brand px-4 py-3 text-sm font-extrabold text-white disabled:opacity-50 sm:col-span-2">{saveProfile.isPending ? "Enviando…" : "Guardar y enviar a revisión"}</button>
+        </form>
+      </section>
+
       {/* Ganancias */}
       <section className="rounded-3xl bg-foreground p-5 text-white">
         <p className="text-xs font-extrabold uppercase tracking-wide text-white/60">
@@ -141,13 +176,9 @@ export default function CourierPanel() {
                   cobra {money(order.total)} en efectivo
                 </p>
               </div>
-              <button
-                disabled={deliver.isPending}
-                onClick={() => deliver.mutate({ orderId: order.id })}
-                className="mt-3 w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50"
-              >
-                ✔️ Marcar como entregado
-              </button>
+              {order.status === "assigned" && <button disabled={markArrived.isPending} onClick={() => markArrived.mutate({ orderId: order.id })} className="mt-3 w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50">📍 Llegué al comercio</button>}
+              {order.status === "arrived" && <button disabled={markPickedUp.isPending} onClick={() => markPickedUp.mutate({ orderId: order.id })} className="mt-3 w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50">📦 Confirmar que recogí el pedido</button>}
+              {order.status === "picked_up" && <button disabled={deliver.isPending} onClick={() => deliver.mutate({ orderId: order.id })} className="mt-3 w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50">✔️ Marcar como entregado</button>}
             </div>
           ))}
         </section>
