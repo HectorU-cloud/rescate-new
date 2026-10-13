@@ -2,6 +2,7 @@ import { importPKCS8, SignJWT } from "jose";
 import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { businesses, orders, pushTokens, users } from "@db/schema";
+import { chatPreview, type ChatRole } from "./chat-rules";
 
 const FIREBASE_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 type ServiceAccount = { project_id: string; client_email: string; private_key: string; token_uri?: string };
@@ -48,7 +49,7 @@ async function getAccessToken(account: ServiceAccount) {
   return data.access_token;
 }
 
-export async function sendPushToUser(userId: number, notification: { title: string; body: string; url?: string; orderId?: number }) {
+export async function sendPushToUser(userId: number, notification: { title: string; body: string; url?: string; orderId?: number; tag?: string }) {
   const account = serviceAccount();
   if (!account) return { sent: 0, skipped: true };
   const db = getDb();
@@ -68,6 +69,7 @@ export async function sendPushToUser(userId: number, notification: { title: stri
           body: notification.body,
           url: notification.url ?? (notification.orderId ? `/pedido/${notification.orderId}` : "/pedidos"),
           ...(notification.orderId ? { orderId: String(notification.orderId) } : {}),
+          ...(notification.tag ? { tag: notification.tag } : {}),
         },
         webpush: { headers: { Urgency: "high" } },
       } }),
@@ -150,5 +152,33 @@ export async function notifyCouriersOrderReady(orderId: number, opts: { reminder
     // Best-effort: el pedido ya cambió de estado y no debe fallar por el push.
     console.error("Error avisando a repartidores:", error);
     return { recipients: 0, sent: 0 };
+  }
+}
+
+/**
+ * Avisa por push al otro participante del chat. Usa su propio `tag` para que el mensaje no
+ * reemplace las notificaciones de estado del pedido (y varios mensajes seguidos se agrupen).
+ * Nunca lanza: el mensaje ya quedó guardado y el push es best-effort.
+ */
+export async function notifyChatMessage(args: {
+  recipientId: number;
+  orderId: number;
+  fromRole: ChatRole;
+  senderName?: string | null;
+  body: string;
+}) {
+  try {
+    const fromCourier = args.fromRole === "courier";
+    const name = args.senderName?.trim().split(/\s+/)[0];
+    await sendPushToUser(args.recipientId, {
+      title: `💬 ${name ? `${name} · ` : ""}${fromCourier ? "tu repartidor" : "tu cliente"}`,
+      body: chatPreview(args.body),
+      // El cliente abre el pedido con el chat desplegado; el repartidor va a su panel.
+      url: fromCourier ? `/pedido/${args.orderId}#chat` : "/repartidor",
+      orderId: args.orderId,
+      tag: `rescate-chat-${args.orderId}`,
+    });
+  } catch (error) {
+    console.error("Error enviando notificación de chat:", error);
   }
 }

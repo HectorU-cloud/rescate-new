@@ -2,6 +2,7 @@ import { adminRouter } from "./admin-router";
 import { authRouter } from "./auth-router";
 import { businessRouter } from "./business-router";
 import { catalogRouter } from "./catalog-router";
+import { chatRouter } from "./chat-router";
 import { courierRouter } from "./courier-router";
 import { ordersRouter } from "./orders-router";
 import { profileRouter } from "./profile-router";
@@ -15,6 +16,7 @@ export const appRouter = createRouter({
   push: pushRouter,
   catalog: catalogRouter,
   orders: ordersRouter,
+  chat: chatRouter,
   business: businessRouter,
   courier: courierRouter,
   admin: adminRouter,

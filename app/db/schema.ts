@@ -291,6 +291,26 @@ export const orderEvents = mysqlTable(
 
 export type OrderEvent = typeof orderEvents.$inferSelect;
 
+// Chat entre el cliente y el repartidor asignado mientras el pedido va en camino.
+// `courierId` identifica el hilo: si el pedido se reasigna a otro repartidor, el nuevo
+// no ve los mensajes del anterior (y el cliente empieza una conversación limpia).
+export const orderMessages = mysqlTable(
+  "order_messages",
+  {
+    id: serial("id").primaryKey(),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
+    courierId: bigint("courierId", { mode: "number", unsigned: true }).notNull(),
+    senderId: bigint("senderId", { mode: "number", unsigned: true }).notNull(),
+    senderRole: mysqlEnum("senderRole", ["customer", "courier"]).notNull(),
+    body: varchar("body", { length: 500 }).notNull(),
+    readAt: timestamp("readAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ orderIdx: index("msg_order_idx").on(t.orderId, t.id) }),
+);
+
+export type OrderMessage = typeof orderMessages.$inferSelect;
+
 // Reclamos de clientes, comercios o repartidores sobre un pedido.
 export const claims = mysqlTable(
   "claims",

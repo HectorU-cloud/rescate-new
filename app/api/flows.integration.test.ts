@@ -45,6 +45,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
     if (created.orders.length) {
       await db.delete(S.orderItems).where(inArray(S.orderItems.orderId, created.orders));
       await db.delete(S.orderEvents).where(inArray(S.orderEvents.orderId, created.orders));
+      await db.delete(S.orderMessages).where(inArray(S.orderMessages.orderId, created.orders));
       await db.delete(S.courierLocations).where(inArray(S.courierLocations.orderId, created.orders));
       await db.delete(S.orders).where(inArray(S.orders.id, created.orders));
     }
@@ -261,6 +262,127 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       const sentAt = first.courierReminderSentAt!.getTime();
       await sweepOrders();
       expect((await getOrder(orderId)).courierReminderSentAt!.getTime()).toBe(sentAt); // no se repite
+    });
+  });
+
+  // ------------------------------------------------------------------ chat cliente ↔ repartidor
+  describe("chat cliente–repartidor", () => {
+    /** Pedido en camino con cliente, comercio y repartidor listos para chatear. */
+    async function setupChat(overrides: Partial<typeof S.orders.$inferInsert> = {}) {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({
+        customerId: customer.id, businessId: biz, status: "picked_up", courierId: courier.id,
+        courierAcceptedAt: new Date(), deliveryConfirmationCode: "482913", ...overrides,
+      });
+      return { customer, owner, courier, orderId };
+    }
+    const messagesOf = async (orderId: number) => db.select().from(S.orderMessages).where(eq(S.orderMessages.orderId, orderId));
+
+    it("cliente y repartidor intercambian mensajes y ambos los ven", async () => {
+      const { customer, courier, orderId } = await setupChat();
+      await callerFor(customer).chat.send({ orderId, body: "Hola, estoy en la puerta azul" });
+      await callerFor(courier).chat.send({ orderId, body: "Perfecto, llego en 3 minutos" });
+
+      const asCustomer = await callerFor(customer).chat.list({ orderId });
+      const asCourier = await callerFor(courier).chat.list({ orderId });
+      expect(asCustomer.role).toBe("customer");
+      expect(asCourier.role).toBe("courier");
+      expect(asCustomer.canSend).toBe(true);
+      expect(asCustomer.messages.map((m) => m.body)).toEqual(["Hola, estoy en la puerta azul", "Perfecto, llego en 3 minutos"]);
+      expect(asCourier.messages).toHaveLength(2);
+      expect(asCustomer.messages.map((m) => m.senderRole)).toEqual(["customer", "courier"]);
+    });
+
+    it("un tercero no puede leer ni escribir en el chat", async () => {
+      const { orderId } = await setupChat();
+      const stranger = await mkUser("customer");
+      await expect(callerFor(stranger).chat.list({ orderId })).rejects.toThrow(/No puedes acceder al chat/);
+      await expect(callerFor(stranger).chat.send({ orderId, body: "hola" })).rejects.toThrow(/No puedes acceder al chat/);
+      await expect(callerFor(stranger).chat.markRead({ orderId })).rejects.toThrow(/No puedes acceder al chat/);
+      expect(await messagesOf(orderId)).toHaveLength(0);
+    });
+
+    it("el dueño del comercio no participa en el chat", async () => {
+      const { owner, orderId } = await setupChat();
+      await expect(callerFor(owner).chat.send({ orderId, body: "hola" })).rejects.toThrow(/No puedes acceder al chat/);
+      await expect(callerFor(owner).chat.list({ orderId })).rejects.toThrow(/No puedes acceder al chat/);
+    });
+
+    it("no se puede escribir si el pedido no está en camino", async () => {
+      for (const status of ["ready", "delivered", "cancelled"] as const) {
+        const { customer, orderId } = await setupChat({ status });
+        await expect(callerFor(customer).chat.send({ orderId, body: "hola" })).rejects.toThrow(/solo mientras el pedido va en camino/);
+      }
+    });
+
+    it("una vez entregado, queda el historial de solo lectura", async () => {
+      const { customer, courier, orderId } = await setupChat();
+      await callerFor(courier).chat.send({ orderId, body: "Ya estoy afuera" });
+      await db.update(S.orders).set({ status: "delivered", deliveredAt: new Date() }).where(eq(S.orders.id, orderId));
+      const list = await callerFor(customer).chat.list({ orderId });
+      expect(list.canSend).toBe(false);
+      expect(list.messages).toHaveLength(1);
+      await expect(callerFor(customer).chat.send({ orderId, body: "gracias" })).rejects.toThrow(/solo mientras el pedido va en camino/);
+    });
+
+    it("rechaza mensajes que contienen el código de confirmación (aunque vaya con espacios)", async () => {
+      const { customer, orderId } = await setupChat();
+      const c = callerFor(customer);
+      await expect(c.chat.send({ orderId, body: "mi código es 482913" })).rejects.toThrow(/código de confirmación/);
+      await expect(c.chat.send({ orderId, body: "4 8 2 - 9 1 3" })).rejects.toThrow(/código de confirmación/);
+      expect(await messagesOf(orderId)).toHaveLength(0);
+      await c.chat.send({ orderId, body: "Casa 12, portón negro" }); // un mensaje normal sí pasa
+      expect(await messagesOf(orderId)).toHaveLength(1);
+    });
+
+    it("rechaza mensajes vacíos o de más de 500 caracteres", async () => {
+      const { customer, orderId } = await setupChat();
+      const c = callerFor(customer);
+      await expect(c.chat.send({ orderId, body: "   " })).rejects.toThrow();
+      await expect(c.chat.send({ orderId, body: "x".repeat(501) })).rejects.toThrow();
+      expect(await messagesOf(orderId)).toHaveLength(0);
+    });
+
+    it("frena el spam: el mensaje 11 en un minuto es rechazado", async () => {
+      const { customer, orderId } = await setupChat();
+      const c = callerFor(customer);
+      for (let i = 0; i < 10; i++) await c.chat.send({ orderId, body: `mensaje ${i}` });
+      await expect(c.chat.send({ orderId, body: "mensaje 11" })).rejects.toThrow(/muy rápido/);
+      expect(await messagesOf(orderId)).toHaveLength(10);
+    });
+
+    it("markRead solo marca lo recibido, no lo que envié yo", async () => {
+      const { customer, courier, orderId } = await setupChat();
+      await callerFor(customer).chat.send({ orderId, body: "del cliente" });
+      await callerFor(courier).chat.send({ orderId, body: "del repartidor" });
+      await callerFor(customer).chat.markRead({ orderId });
+      const rows = await messagesOf(orderId);
+      expect(rows.find((m) => m.senderRole === "courier")!.readAt).not.toBeNull();
+      expect(rows.find((m) => m.senderRole === "customer")!.readAt).toBeNull();
+    });
+
+    it("si el pedido pasa a otro repartidor, el nuevo no ve los mensajes del anterior", async () => {
+      const { customer, courier: first, orderId } = await setupChat();
+      await callerFor(first).chat.send({ orderId, body: "Ya recogí tu pedido" });
+
+      // Simula soltar y volver a tomar: otro repartidor queda asignado.
+      const second = await mkUser("courier");
+      await db.update(S.orders).set({ courierId: second.id }).where(eq(S.orders.id, orderId));
+
+      expect((await callerFor(second).chat.list({ orderId })).messages).toHaveLength(0);
+      expect((await callerFor(customer).chat.list({ orderId })).messages).toHaveLength(0);
+      await expect(callerFor(first).chat.list({ orderId })).rejects.toThrow(/No puedes acceder al chat/);
+      await expect(callerFor(first).chat.send({ orderId, body: "sigo aquí" })).rejects.toThrow(/No puedes acceder al chat/);
+    });
+
+    it("no hay chat en pedidos de rescate", async () => {
+      const customer = await mkUser("customer");
+      const biz = await mkBusiness((await mkUser("business")).id);
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, type: "rescue", status: "accepted" });
+      await expect(callerFor(customer).chat.list({ orderId })).rejects.toThrow(/No puedes acceder al chat/);
     });
   });
 });

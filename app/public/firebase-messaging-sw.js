@@ -16,7 +16,7 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
       body: payload.data?.body || payload.notification?.body || 'Tienes una actualización de tu pedido.',
       icon: '/favicon.ico',
       data: { url: payload.data?.url || '/pedidos' },
-      tag: payload.data?.orderId ? `rescate-order-${payload.data.orderId}` : 'rescate-notification',
+      tag: payload.data?.tag || (payload.data?.orderId ? `rescate-order-${payload.data.orderId}` : 'rescate-notification'),
     };
     self.registration.showNotification(title, options);
   });

@@ -5,6 +5,7 @@ import { LOGIN_PATH } from "@/const";
 import { money, timeAgo, withinMinutes } from "@/lib/format";
 import { toast } from "sonner";
 import { BUSINESS_RULES } from "@contracts/constants";
+import { ChatBox } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 
 export default function CourierPanel() {
@@ -208,6 +209,9 @@ export default function CourierPanel() {
               >
                 {deliver.isPending ? "Verificando código…" : "✔️ Confirmar entrega"}
               </button>
+              <div className="mt-3">
+                <ChatBox orderId={order.id} />
+              </div>
               <ClaimBox orderId={order.id} role="courier" collapsible />
             </div>
           ))}

@@ -3,6 +3,7 @@ import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
 import { StatusTimeline } from "@/components/StatusTimeline";
+import { ChatBox } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 import { RatingBox } from "@/components/RatingBox";
 import { money, timeAgo } from "@/lib/format";
@@ -159,6 +160,11 @@ export default function OrderDetail() {
             </div>
           )}
       </section>
+
+      {/* Chat con el repartidor (en camino; luego queda como historial si hubo mensajes) */}
+      {order.type === "delivery" && !!order.courierId && order.customerId === user?.id && ["picked_up", "delivered"].includes(order.status) && (
+        <ChatBox orderId={order.id} />
+      )}
 
       {/* Detalle */}
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
