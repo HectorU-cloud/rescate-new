@@ -45,7 +45,7 @@ export const profileRouter = createRouter({
       }).where(eq(users.id, ctx.user.id));
       return { ok: true, backToReview: sensitiveChange };
     }),
-  adminCouriers: adminQuery.query(async () => getDb().select({ id: users.id, name: users.name, email: users.email, courierPhotoUrl: users.courierPhotoUrl, courierVehicle: users.courierVehicle, courierPlate: users.courierPlate, courierBio: users.courierBio, courierApproved: users.courierApproved }).from(users).where(eq(users.appRole, "courier"))),
+  adminCouriers: adminQuery.query(async () => getDb().select({ id: users.id, name: users.name, email: users.email, courierPhotoUrl: users.courierPhotoUrl, courierVehicle: users.courierVehicle, courierPlate: users.courierPlate, courierBio: users.courierBio, courierApproved: users.courierApproved, courierRating: users.courierRating, courierRatingCount: users.courierRatingCount }).from(users).where(eq(users.appRole, "courier"))),
   // Perfiles de repartidor enviados a revisión (los usa AdminCourierReview).
   pendingCouriers: adminQuery.query(async () =>
     getDb().select({

@@ -9,6 +9,7 @@ import {
   orderItems,
   orders,
   products,
+  ratings,
   rescuePacks,
   users,
 } from "./schema";
@@ -41,6 +42,7 @@ async function main() {
         .where(eq(orders.businessId, b.id));
       for (const o of ords) {
         await db.delete(orderItems).where(eq(orderItems.orderId, o.id));
+        await db.delete(ratings).where(eq(ratings.orderId, o.id));
       }
       await db.delete(orders).where(eq(orders.businessId, b.id));
       await db.delete(products).where(eq(products.businessId, b.id));
@@ -57,6 +59,7 @@ async function main() {
       .where(like(orders.code, prefix));
     for (const o of oldOrders) {
       await db.delete(orderItems).where(eq(orderItems.orderId, o.id));
+      await db.delete(ratings).where(eq(ratings.orderId, o.id));
       await db.delete(orders).where(eq(orders.id, o.id));
     }
   }

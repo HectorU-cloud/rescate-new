@@ -375,6 +375,8 @@ export const businessRouter = createRouter({
       revenue: Number(row?.revenue ?? 0),
       rescues: Number(row?.rescues ?? 0),
       activeOrders: Number(pending[0]?.count ?? 0),
+      rating: biz.rating,
+      ratingCount: biz.ratingCount,
     };
   }),
 });

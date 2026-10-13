@@ -6,8 +6,9 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
-import { isBusinessOpenNow, quoteDelivery } from "./lib/business-rules";
+import { isBusinessOpenNow, isPackReservable, quoteDelivery } from "./lib/business-rules";
 import { logOrderEvent } from "./lib/order-events";
+import { recomputeBusinessRating, recomputeCourierRating } from "./lib/ratings";
 import { BUSINESS_RULES } from "@contracts/constants";
 import { getDb } from "./queries/connection";
 import {
@@ -17,6 +18,7 @@ import {
   orderItems,
   orders,
   products,
+  ratings,
   rescuePacks,
   users,
 } from "@db/schema";
@@ -163,6 +165,12 @@ export const ordersRouter = createRouter({
       if (!pack || !pack.isActive || pack.quantityLeft < input.quantity) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pack ya no está disponible" });
       }
+      if (!isPackReservable(pack.pickupStart, pack.pickupEnd)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `La ventana de retiro de este pack (${pack.pickupStart}–${pack.pickupEnd}) ya terminó`,
+        });
+      }
 
       const total = pack.rescuePrice * input.quantity;
 
@@ -238,20 +246,89 @@ export const ordersRouter = createRouter({
       };
     }),
 
-  // Reclamo del cliente sobre su pedido (no se puede reclamar un pedido ajeno).
+  // Reclamo sobre un pedido. Lo puede abrir el cliente, el dueño del comercio o el repartidor
+  // asignado; nadie más. Si una misma persona tiene varios roles en el pedido, `role` decide cuál.
   createClaim: authedQuery
-    .input(z.object({ orderId: z.number().int().positive(), reason: z.string().trim().min(10, "Cuéntanos qué pasó (mínimo 10 caracteres)").max(500) }))
+    .input(z.object({
+      orderId: z.number().int().positive(),
+      reason: z.string().trim().min(10, "Cuéntanos qué pasó (mínimo 10 caracteres)").max(500),
+      role: z.enum(["customer", "business", "courier"]).optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const order = await db.query.orders.findFirst({ where: eq(orders.id, input.orderId) });
-      if (!order || order.customerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "No puedes reclamar este pedido" });
-      const [open] = await db.select({ id: claims.id }).from(claims).where(and(eq(claims.orderId, order.id), eq(claims.userId, ctx.user.id), eq(claims.status, "open"))).limit(1);
+      if (!order) throw new TRPCError({ code: "FORBIDDEN", message: "No puedes reclamar este pedido" });
+      const ownedBiz = await db.query.businesses.findFirst({
+        where: and(eq(businesses.id, order.businessId), eq(businesses.ownerId, ctx.user.id)),
+      });
+      const roles: ("customer" | "business" | "courier")[] = [];
+      if (order.customerId === ctx.user.id) roles.push("customer");
+      if (ownedBiz) roles.push("business");
+      if (order.courierId === ctx.user.id) roles.push("courier");
+      const role = input.role ?? roles[0];
+      if (!role || !roles.includes(role)) throw new TRPCError({ code: "FORBIDDEN", message: "No puedes reclamar este pedido" });
+      if (role !== "customer" && order.status === "pending") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido aún no fue aceptado: si hay un problema, cancélalo" });
+      }
+      const [open] = await db.select({ id: claims.id }).from(claims).where(and(
+        eq(claims.orderId, order.id), eq(claims.userId, ctx.user.id), eq(claims.reporterRole, role), eq(claims.status, "open"),
+      )).limit(1);
       if (open) throw new TRPCError({ code: "BAD_REQUEST", message: "Ya tienes un reclamo abierto para este pedido" });
-      await db.insert(claims).values({ orderId: order.id, userId: ctx.user.id, reporterRole: "customer", reason: input.reason });
-      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "customer", type: "claim_opened", detail: input.reason });
+      await db.insert(claims).values({ orderId: order.id, userId: ctx.user.id, reporterRole: role, reason: input.reason });
+      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: role, type: "claim_opened", detail: input.reason });
+      const who = role === "customer" ? "cliente" : role === "business" ? "comercio" : "repartidor";
       const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
-      await sendPushToUsers(admins.map((a) => a.id), { title: "Nuevo reclamo 🚩", body: `Pedido ${order.code}: ${input.reason.slice(0, 80)}`, url: "/admin" }).catch(() => undefined);
+      await sendPushToUsers(admins.map((a) => a.id), { title: "Nuevo reclamo 🚩", body: `Pedido ${order.code} (${who}): ${input.reason.slice(0, 80)}`, url: "/admin" }).catch(() => undefined);
       return { ok: true };
+    }),
+
+  // Calificación del cliente tras la entrega (una por pedido): comercio siempre, repartidor si hubo.
+  rate: authedQuery
+    .input(z.object({
+      orderId: z.number().int().positive(),
+      businessStars: z.number().int().min(1).max(5),
+      businessComment: z.string().trim().max(300).optional(),
+      courierStars: z.number().int().min(1).max(5).optional(),
+      courierComment: z.string().trim().max(300).optional(),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const order = await db.query.orders.findFirst({ where: eq(orders.id, input.orderId) });
+      if (!order || order.customerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "No puedes calificar este pedido" });
+      if (order.status !== "delivered") throw new TRPCError({ code: "BAD_REQUEST", message: "Podrás calificar cuando el pedido sea entregado" });
+      if (input.courierStars != null && !order.courierId) throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido no tuvo repartidor" });
+      try {
+        await db.insert(ratings).values({
+          orderId: order.id,
+          customerId: ctx.user.id,
+          businessId: order.businessId,
+          courierId: input.courierStars != null ? order.courierId : null,
+          businessStars: input.businessStars,
+          businessComment: input.businessComment || null,
+          courierStars: input.courierStars ?? null,
+          courierComment: input.courierStars != null ? input.courierComment || null : null,
+        });
+      } catch (error) {
+        const e = error as { code?: string; errno?: number; cause?: { code?: string; errno?: number } };
+        if (e.code === "ER_DUP_ENTRY" || e.errno === 1062 || e.cause?.code === "ER_DUP_ENTRY" || e.cause?.errno === 1062) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Ya calificaste este pedido" });
+        }
+        throw error;
+      }
+      await recomputeBusinessRating(order.businessId);
+      if (input.courierStars != null && order.courierId) await recomputeCourierRating(order.courierId);
+      await logOrderEvent({
+        orderId: order.id, actorId: ctx.user.id, actorRole: "customer", type: "rated",
+        detail: `comercio ${input.businessStars}★${input.courierStars != null ? ` · repartidor ${input.courierStars}★` : ""}`,
+      });
+      return { ok: true };
+    }),
+
+  myRating: authedQuery
+    .input(z.object({ orderId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) => {
+      const [row] = await getDb().select().from(ratings).where(and(eq(ratings.orderId, input.orderId), eq(ratings.customerId, ctx.user.id))).limit(1);
+      return row ?? null;
     }),
 
   myClaims: authedQuery

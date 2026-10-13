@@ -1,9 +1,10 @@
-import { useState } from "react";
 import { useParams } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
 import { StatusTimeline } from "@/components/StatusTimeline";
+import { ClaimBox } from "@/components/ClaimBox";
+import { RatingBox } from "@/components/RatingBox";
 import { money, timeAgo } from "@/lib/format";
 import { MILAGRO } from "@contracts/constants";
 import { toast } from "sonner";
@@ -214,56 +215,12 @@ export default function OrderDetail() {
           {order.cancelReason ? `: ${order.cancelReason}` : "."}
         </p>
       )}
+      {order.customerId === user?.id && order.status === "delivered" && (
+        <RatingBox orderId={order.id} businessName={business?.name} hasCourier={!!order.courierId} />
+      )}
       {order.customerId === user?.id && !["pending", "accepted"].includes(order.status) && (
-        <ClaimBox orderId={order.id} />
+        <ClaimBox orderId={order.id} role="customer" />
       )}
     </div>
-  );
-}
-
-function ClaimBox({ orderId }: { orderId: number }) {
-  const utils = trpc.useUtils();
-  const [reason, setReason] = useState("");
-  const claims = trpc.orders.myClaims.useQuery({ orderId });
-  const create = trpc.orders.createClaim.useMutation({
-    onSuccess: () => {
-      setReason("");
-      toast.success("Reclamo enviado. Te responderemos pronto.");
-      utils.orders.myClaims.invalidate({ orderId });
-    },
-    onError: (e) => toast.error(e.message),
-  });
-  const hasOpen = (claims.data ?? []).some((c) => c.status === "open");
-  return (
-    <section className="space-y-3 rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">
-      <p className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">¿Hubo un problema?</p>
-      {(claims.data ?? []).map((c) => (
-        <div key={c.id} className="rounded-xl bg-secondary px-3 py-2 text-xs font-semibold">
-          <p>
-            <b>{c.status === "open" ? "🕒 En revisión" : c.status === "resolved" ? "✅ Resuelto" : "❌ Rechazado"}:</b> {c.reason}
-          </p>
-          {c.resolution && <p className="mt-1 text-muted-foreground">Respuesta: {c.resolution}</p>}
-        </div>
-      ))}
-      {!hasOpen && (
-        <>
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            maxLength={500}
-            rows={3}
-            placeholder="Cuéntanos qué pasó (pedido incompleto, demora, trato, cobro…)"
-            className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
-          />
-          <button
-            disabled={create.isPending || reason.trim().length < 10}
-            onClick={() => create.mutate({ orderId, reason: reason.trim() })}
-            className="w-full rounded-xl bg-foreground py-3 text-sm font-extrabold text-white disabled:opacity-50"
-          >
-            {create.isPending ? "Enviando…" : "Enviar reclamo"}
-          </button>
-        </>
-      )}
-    </section>
   );
 }

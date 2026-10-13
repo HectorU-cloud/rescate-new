@@ -225,10 +225,13 @@ export const courierRouter = createRouter({
       .select({ count: sql<number>`count(*)` })
       .from(orders)
       .where(and(eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
+    const [me] = await db.select({ rating: users.courierRating, ratingCount: users.courierRatingCount }).from(users).where(eq(users.id, ctx.user.id)).limit(1);
     return {
       deliveries: Number(row?.deliveries ?? 0),
       earnings: Number(row?.earnings ?? 0),
       active: Number(activeRow?.count ?? 0),
+      rating: me?.rating ?? null,
+      ratingCount: me?.ratingCount ?? 0,
     };
   }),
 });

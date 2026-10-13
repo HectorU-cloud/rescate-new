@@ -5,6 +5,7 @@ import { LOGIN_PATH } from "@/const";
 import { money, timeAgo, withinMinutes } from "@/lib/format";
 import { toast } from "sonner";
 import { BUSINESS_RULES } from "@contracts/constants";
+import { ClaimBox } from "@/components/ClaimBox";
 
 export default function CourierPanel() {
   const { user, isAuthenticated } = useAuth({
@@ -116,6 +117,7 @@ export default function CourierPanel() {
         <div className="mt-3 flex gap-4 text-xs font-bold text-white/80">
           <span>✅ {earnings.data?.deliveries ?? 0} entregas</span>
           <span>🛵 {earnings.data?.active ?? 0} en curso</span>
+          <span>{earnings.data?.rating != null ? `⭐ ${earnings.data.rating.toFixed(1)} (${earnings.data.ratingCount})` : "⭐ Sin calificaciones"}</span>
           <span>El 100% del envío es tuyo</span>
         </div>
       </section>
@@ -206,6 +208,7 @@ export default function CourierPanel() {
               >
                 {deliver.isPending ? "Verificando código…" : "✔️ Confirmar entrega"}
               </button>
+              <ClaimBox orderId={order.id} role="courier" collapsible />
             </div>
           ))}
         </section>
@@ -267,14 +270,17 @@ export default function CourierPanel() {
           {done.slice(0, 10).map(({ order, business }) => (
             <div
               key={order.id}
-              className="flex items-center justify-between rounded-2xl bg-card px-4 py-3 ring-1 ring-border"
+              className="rounded-2xl bg-card px-4 py-3 ring-1 ring-border"
             >
-              <p className="text-xs font-bold text-muted-foreground">
-                ✅ {order.code} · {business?.name}
-              </p>
-              <span className="text-xs font-extrabold text-brand-dark">
-                +{money(order.deliveryFee)}
-              </span>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold text-muted-foreground">
+                  ✅ {order.code} · {business?.name}
+                </p>
+                <span className="text-xs font-extrabold text-brand-dark">
+                  +{money(order.deliveryFee)}
+                </span>
+              </div>
+              <ClaimBox orderId={order.id} role="courier" collapsible />
             </div>
           ))}
         </section>

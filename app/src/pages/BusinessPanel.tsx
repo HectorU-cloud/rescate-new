@@ -3,6 +3,7 @@ import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
 import { money, timeAgo } from "@/lib/format";
+import { ClaimBox } from "@/components/ClaimBox";
 import {
   BUSINESS_CATEGORIES,
   ORDER_STATUS_LABELS,
@@ -242,6 +243,7 @@ function Panel({
         <Stat label="Activos ahora" value={String(stats.data?.activeOrders ?? 0)} />
         <Stat label="Ingresos" value={money(stats.data?.revenue ?? 0)} />
         <Stat label="Rescates" value={String(stats.data?.rescues ?? 0)} />
+        <Stat label="Calificación" value={stats.data?.ratingCount ? `⭐ ${stats.data.rating.toFixed(1)} (${stats.data.ratingCount})` : "Sin calificaciones"} />
       </div>
 
       {/* Tabs */}
@@ -478,6 +480,7 @@ function OrdersTab({ businessId }: { businessId: number }) {
                 </button>
               )}
             </div>
+            {order.status !== "pending" && <ClaimBox orderId={order.id} role="business" collapsible />}
           </div>
         );
       })}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { haversineKm, isBusinessOpenNow, isWithinHours, quoteDelivery } from "./business-rules";
+import { bayesianRating, haversineKm, isBusinessOpenNow, isPackReservable, isWithinHours, quoteDelivery } from "./business-rules";
 
 // Ecuador = UTC-5: 15:00 UTC son las 10:00 en Milagro.
 const at = (utcHour: number, utcMin = 0) => new Date(Date.UTC(2026, 0, 15, utcHour, utcMin));
@@ -57,5 +57,47 @@ describe("horarios", () => {
   it("cerrado manualmente aunque esté en horario", () => {
     expect(isBusinessOpenNow({ isOpen: false, opensAt: "08:00", closesAt: "22:00" }, at(15))).toBe(false);
     expect(isBusinessOpenNow({ isOpen: true, opensAt: "08:00", closesAt: "22:00" }, at(15))).toBe(true);
+  });
+});
+
+describe("isPackReservable (ventana de retiro)", () => {
+  it("se puede reservar antes de que empiece la ventana", () => {
+    expect(isPackReservable("19:00", "20:30", at(15))).toBe(true); // 10:00
+    expect(isPackReservable("19:00", "20:30", at(23, 59))).toBe(true); // 18:59
+  });
+  it("se puede reservar durante la ventana", () => {
+    expect(isPackReservable("19:00", "20:30", at(1, 0))).toBe(true); // 20:00 EC
+  });
+  it("20:29 aún se puede y 20:30 ya no", () => {
+    expect(isPackReservable("19:00", "20:30", at(1, 29))).toBe(true); // 20:29
+    expect(isPackReservable("19:00", "20:30", at(1, 30))).toBe(false); // 20:30
+  });
+  it("después del fin de la ventana se bloquea", () => {
+    expect(isPackReservable("19:00", "20:30", at(3, 0))).toBe(false); // 22:00
+  });
+  it("ventana que cruza la medianoche (22:00–01:00)", () => {
+    expect(isPackReservable("22:00", "01:00", at(15))).toBe(false); // 10:00: hueco entre el fin y el inicio
+    expect(isPackReservable("22:00", "01:00", at(3, 0))).toBe(true); // 22:00, inicio de la ventana
+    expect(isPackReservable("22:00", "01:00", at(4, 0))).toBe(true); // 23:00, dentro
+    expect(isPackReservable("22:00", "01:00", at(5, 59))).toBe(true); // 00:59, dentro
+    expect(isPackReservable("22:00", "01:00", at(6, 0))).toBe(false); // 01:00, terminó
+    expect(isPackReservable("22:00", "01:00", at(10, 0))).toBe(false); // 05:00, hueco
+  });
+  it("inicio = fin significa todo el día", () => {
+    expect(isPackReservable("00:00", "00:00", at(9))).toBe(true);
+  });
+});
+
+describe("bayesianRating", () => {
+  it("sin calificaciones vale el valor inicial (4.5)", () => {
+    expect(bayesianRating(0, 0)).toBe(4.5);
+  });
+  it("una sola calificación apenas mueve el promedio", () => {
+    expect(bayesianRating(5, 1)).toBe(4.58);
+    expect(bayesianRating(1, 1)).toBe(3.92);
+  });
+  it("con muchas calificaciones converge al promedio real", () => {
+    expect(bayesianRating(500, 100)).toBe(4.98); // cien de 5★
+    expect(bayesianRating(100, 100)).toBe(1.17); // cien de 1★
   });
 });

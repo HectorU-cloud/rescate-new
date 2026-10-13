@@ -75,7 +75,7 @@ export default function BusinessDetail() {
               </p>
             </div>
             <span className="shrink-0 rounded-full bg-secondary px-2.5 py-1 text-xs font-extrabold">
-              ⭐ {business.rating.toFixed(1)}
+              {business.ratingCount > 0 ? `⭐ ${business.rating.toFixed(1)} (${business.ratingCount})` : "✨ Nuevo"}
             </span>
           </div>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-foreground/80">
@@ -224,7 +224,7 @@ export default function BusinessDetail() {
                       </span>
                     </div>
                     <button
-                      disabled={pending || !business.openNow}
+                      disabled={pending || !business.openNow || !pack.reservable}
                       onClick={() => {
                         if (!isAuthenticated) {
                           navigate("/login");
@@ -238,7 +238,7 @@ export default function BusinessDetail() {
                       }}
                       className="rounded-full bg-rescue px-5 py-2.5 text-sm font-extrabold text-white shadow-sm transition-transform active:scale-95 disabled:opacity-50"
                     >
-                      {pending ? "Rescatando…" : "¡Rescatar!"}
+                      {pending ? "Rescatando…" : !pack.reservable ? "Retiro terminado" : "¡Rescatar!"}
                     </button>
                   </div>
                   <p className="mt-2 text-[11px] font-semibold text-muted-foreground">

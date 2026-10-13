@@ -19,7 +19,7 @@ export function BusinessCard({ business }: { business: Business & { openNow: boo
           </span>
         )}
         <span className="absolute bottom-3 right-3 rounded-full bg-card px-2.5 py-1 text-[11px] font-extrabold text-foreground shadow-sm">
-          ⭐ {business.rating.toFixed(1)}
+          {business.ratingCount > 0 ? `⭐ ${business.rating.toFixed(1)} (${business.ratingCount})` : "✨ Nuevo"}
         </span>
       </div>
       <div className="flex flex-1 flex-col gap-1 p-4">
@@ -43,7 +43,7 @@ export function RescueCard({
   pack,
   business,
 }: {
-  pack: RescuePack;
+  pack: RescuePack & { reservable?: boolean };
   business: Business | null;
 }) {
   const discount = Math.round(
@@ -75,8 +75,8 @@ export function RescueCard({
               {money(pack.originalPrice)}
             </span>
           </div>
-          <span className="text-[11px] font-bold text-muted-foreground">
-            {pack.quantityLeft} disp.
+          <span className={`text-[11px] font-bold ${pack.reservable === false ? "text-destructive" : "text-muted-foreground"}`}>
+            {pack.reservable === false ? "Retiro terminado" : `${pack.quantityLeft} disp.`}
           </span>
         </div>
       </div>

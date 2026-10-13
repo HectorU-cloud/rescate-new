@@ -11,6 +11,7 @@ import {
   int,
   double,
   index,
+  uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
 export const users = mysqlTable("users", {
@@ -35,6 +36,9 @@ export const users = mysqlTable("users", {
   courierReviewNote: varchar("courierReviewNote", { length: 300 }),
   // El repartidor decide si quiere recibir avisos de pedidos nuevos
   courierAvailable: boolean("courierAvailable").default(true).notNull(),
+  // Calificación del repartidor (null hasta su primera calificación)
+  courierRating: double("courierRating"),
+  courierRatingCount: int("courierRatingCount").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
     .defaultNow()
@@ -85,6 +89,8 @@ export const businesses = mysqlTable(
     approvalNote: varchar("approvalNote", { length: 300 }),
     deliveryMinutes: int("deliveryMinutes").default(30).notNull(),
     rating: double("rating").default(4.5).notNull(),
+    // Cantidad de calificaciones reales que respaldan el rating (0 = aún sin calificaciones)
+    ratingCount: int("ratingCount").default(0).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   (t) => ({
@@ -307,3 +313,27 @@ export const claims = mysqlTable(
 );
 
 export type Claim = typeof claims.$inferSelect;
+
+// Calificación del cliente tras la entrega: una por pedido, al comercio y (si hubo) al repartidor.
+export const ratings = mysqlTable(
+  "ratings",
+  {
+    id: serial("id").primaryKey(),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
+    customerId: bigint("customerId", { mode: "number", unsigned: true }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
+    courierId: bigint("courierId", { mode: "number", unsigned: true }),
+    businessStars: int("businessStars").notNull(), // 1–5
+    businessComment: varchar("businessComment", { length: 300 }),
+    courierStars: int("courierStars"), // 1–5, solo si hubo repartidor
+    courierComment: varchar("courierComment", { length: 300 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    orderUq: uniqueIndex("rating_order_uq").on(t.orderId),
+    bizIdx: index("rating_biz_idx").on(t.businessId),
+    courierIdx: index("rating_courier_idx").on(t.courierId),
+  }),
+);
+
+export type Rating = typeof ratings.$inferSelect;

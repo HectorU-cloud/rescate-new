@@ -3,7 +3,9 @@ import { and, desc, eq, gt } from "drizzle-orm";
 import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { businesses, products, rescuePacks } from "@db/schema";
-import { isBusinessOpenNow } from "./lib/business-rules";
+import { isBusinessOpenNow, isPackReservable } from "./lib/business-rules";
+
+const withReservable = <T extends { pickupStart: string; pickupEnd: string }>(p: T) => ({ ...p, reservable: isPackReservable(p.pickupStart, p.pickupEnd) });
 
 const withOpenNow = <T extends { isOpen: boolean; opensAt: string; closesAt: string }>(b: T) => ({ ...b, openNow: isBusinessOpenNow(b) });
 
@@ -62,7 +64,7 @@ export const catalogRouter = createRouter({
             gt(rescuePacks.quantityLeft, 0),
           ),
         );
-      return { business: withOpenNow(business), products: prods, rescuePacks: packs };
+      return { business: withOpenNow(business), products: prods, rescuePacks: packs.map(withReservable) };
     }),
 
   // Todos los packs de rescate activos (sección "Rescate")
@@ -76,7 +78,7 @@ export const catalogRouter = createRouter({
     const bizRows = await db.select().from(businesses);
     const byId = new Map(bizRows.map((b) => [b.id, b]));
     return packs
-      .map((p) => ({ pack: p, business: byId.get(p.businessId) ?? null }))
+      .map((p) => ({ pack: withReservable(p), business: byId.get(p.businessId) ?? null }))
       .filter((r) => r.business !== null && r.business.approvalStatus === "approved");
   }),
 });

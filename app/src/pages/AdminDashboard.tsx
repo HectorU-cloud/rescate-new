@@ -113,6 +113,8 @@ function Metrics({ data, loading }: { data: Overview | undefined; loading: boole
         <Stat label="Comercios por aprobar" value={String(data.pendingBusinesses)} warn={data.pendingBusinesses > 0} />
         <Stat label="Repartidores por verificar" value={String(data.pendingCouriers)} warn={data.pendingCouriers > 0} />
         <Stat label="Reclamos abiertos" value={String(data.openClaims)} warn={data.openClaims > 0} />
+        <Stat label="Calificación media de comercios" value={data.avgBusinessRating == null ? "—" : `⭐ ${data.avgBusinessRating} (${data.ratingsCount})`} warn={data.avgBusinessRating != null && data.avgBusinessRating < 3.5} />
+        <Stat label="Calificación media de repartidores" value={data.avgCourierRating == null ? "—" : `⭐ ${data.avgCourierRating} (${data.courierRatingsCount})`} warn={data.avgCourierRating != null && data.avgCourierRating < 3.5} />
       </div>
 
       <section className={card}>
@@ -133,6 +135,20 @@ function Metrics({ data, loading }: { data: Overview | undefined; loading: boole
           </ul>
         )}
       </section>
+
+      {data.lowRatedBusinesses.length > 0 && (
+        <section className={`${card} ring-amber-300`}>
+          <p className="mb-3 text-xs font-extrabold uppercase tracking-wide text-muted-foreground">⚠️ Comercios con calificación baja</p>
+          <ul className="space-y-1.5 text-sm font-semibold">
+            {data.lowRatedBusinesses.map((b) => (
+              <li key={b.id} className="flex justify-between">
+                <span>{b.name}</span>
+                <span className="text-muted-foreground">⭐ {b.rating.toFixed(1)} · {b.ratingCount} calificaciones</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className={card}>
         <p className="mb-3 text-xs font-extrabold uppercase tracking-wide text-muted-foreground">Comercios con más pedidos</p>
@@ -190,7 +206,7 @@ function BusinessesTab() {
             <span className="shrink-0 text-[11px] font-bold text-muted-foreground">{timeAgo(b.createdAt)}</span>
           </div>
           <p className="text-xs font-bold text-muted-foreground">
-            🕒 {b.opensAt}–{b.closesAt} · radio {b.deliveryRadiusKm} km · envío {money(b.deliveryFee)} + {money(b.feePerKm)}/km · mínimo {money(b.minOrder)}
+            {b.ratingCount > 0 ? `⭐ ${b.rating.toFixed(1)} (${b.ratingCount}) · ` : "✨ Sin calificaciones · "}🕒 {b.opensAt}–{b.closesAt} · radio {b.deliveryRadiusKm} km · envío {money(b.deliveryFee)} + {money(b.feePerKm)}/km · mínimo {money(b.minOrder)}
           </p>
           {b.approvalNote && <p className="text-xs font-bold text-destructive">Motivo: {b.approvalNote}</p>}
           <div className="flex gap-2">
@@ -326,7 +342,7 @@ function ClaimsTab() {
 
   const answer = (id: number, decision: "resolved" | "rejected") => {
     const resolution = window.prompt(
-      decision === "resolved" ? "Respuesta para el cliente (qué se hará):" : "Motivo del rechazo (lo verá el cliente):",
+      decision === "resolved" ? "Respuesta para quien reclamó (qué se hará):" : "Motivo del rechazo (lo verá quien reclamó):",
     );
     if (!resolution || resolution.trim().length < 5) return;
     resolve.mutate({ id, decision, resolution: resolution.trim() });
@@ -349,7 +365,7 @@ function ClaimsTab() {
             <div>
               <p className="text-sm font-extrabold">Pedido {c.orderCode ?? `#${c.orderId}`} · {c.orderStatus ? STATUS_LABEL[c.orderStatus] : "—"}</p>
               <p className="text-xs font-semibold text-muted-foreground">
-                {c.reporterName ?? "Usuario"} ({c.reporterRole}) · {c.reporterPhone ?? c.reporterEmail ?? "sin contacto"}
+                {c.reporterName ?? "Usuario"} ({c.reporterRole === "business" ? "comercio" : c.reporterRole === "courier" ? "repartidor" : "cliente"}) · {c.reporterPhone ?? c.reporterEmail ?? "sin contacto"}
               </p>
             </div>
             <span className="text-[11px] font-bold text-muted-foreground">{timeAgo(c.createdAt)}</span>

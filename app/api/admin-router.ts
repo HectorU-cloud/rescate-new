@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { logOrderEvent } from "./lib/order-events";
 import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
-import { businesses, claims, orderEvents, orders, users } from "@db/schema";
+import { businesses, claims, orderEvents, orders, ratings, users } from "@db/schema";
 
 const daysAgo = (n: number) => {
   const d = new Date();
@@ -65,6 +65,12 @@ export const adminRouter = createRouter({
       .where(and(eq(users.appRole, "courier"), eq(users.courierApproved, true), eq(users.courierAvailable, true)));
     const [openClaims] = await db.select({ count: sql<number>`count(*)` }).from(claims).where(eq(claims.status, "open"));
 
+    const [bizRatings] = await db.select({ avg: sql<number | null>`avg(${ratings.businessStars})`, count: sql<number>`count(*)` }).from(ratings);
+    const [courierRatings] = await db.select({ avg: sql<number | null>`avg(${ratings.courierStars})`, count: sql<number>`count(${ratings.courierStars})` }).from(ratings);
+    // Comercios con al menos 3 calificaciones y rating bajo: candidatos a revisión.
+    const lowRated = await db.select({ id: businesses.id, name: businesses.name, rating: businesses.rating, ratingCount: businesses.ratingCount })
+      .from(businesses).where(and(gte(businesses.ratingCount, 3), lt(businesses.rating, 3.5))).orderBy(asc(businesses.rating)).limit(5);
+
     const totalOrders = Number(totals?.orders ?? 0);
     return {
       totalOrders,
@@ -84,6 +90,11 @@ export const adminRouter = createRouter({
       pendingCouriers: Number(pendingCouriers?.count ?? 0),
       availableCouriers: Number(availableCouriers?.count ?? 0),
       openClaims: Number(openClaims?.count ?? 0),
+      ratingsCount: Number(bizRatings?.count ?? 0),
+      avgBusinessRating: bizRatings?.avg == null ? null : Math.round(Number(bizRatings.avg) * 10) / 10,
+      courierRatingsCount: Number(courierRatings?.count ?? 0),
+      avgCourierRating: courierRatings?.avg == null ? null : Math.round(Number(courierRatings.avg) * 10) / 10,
+      lowRatedBusinesses: lowRated,
       perDay: perDay.map((r) => ({ day: String(r.day), orders: Number(r.orders), revenue: Number(r.revenue) })),
       topBusinesses: topBusinesses.map((r) => ({ id: r.id, name: r.name, orders: Number(r.orders), revenue: Number(r.revenue) })),
     };
@@ -99,6 +110,7 @@ export const adminRouter = createRouter({
           id: businesses.id, name: businesses.name, category: businesses.category, address: businesses.address,
           phone: businesses.phone, emoji: businesses.emoji, approvalStatus: businesses.approvalStatus, approvalNote: businesses.approvalNote,
           opensAt: businesses.opensAt, closesAt: businesses.closesAt, deliveryRadiusKm: businesses.deliveryRadiusKm,
+          rating: businesses.rating, ratingCount: businesses.ratingCount,
           minOrder: businesses.minOrder, deliveryFee: businesses.deliveryFee, feePerKm: businesses.feePerKm,
           ownerName: users.name, ownerEmail: users.email, createdAt: businesses.createdAt,
         })
@@ -206,7 +218,7 @@ export const adminRouter = createRouter({
     .input(z.object({
       id: z.number().int().positive(),
       decision: z.enum(["resolved", "rejected"]),
-      resolution: z.string().trim().min(5, "Escribe una respuesta para el cliente").max(500),
+      resolution: z.string().trim().min(5, "Escribe una respuesta para quien reclamó").max(500),
     }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
@@ -218,7 +230,7 @@ export const adminRouter = createRouter({
       }).where(and(eq(claims.id, claim.id), eq(claims.status, "open")));
       if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Este reclamo ya fue atendido" });
       await logOrderEvent({ orderId: claim.orderId, actorId: ctx.user.id, actorRole: "admin", type: `claim_${input.decision}`, detail: input.resolution });
-      await sendPushToUser(claim.userId, { title: "Respondimos a tu reclamo", body: input.resolution.slice(0, 120), url: `/pedido/${claim.orderId}`, orderId: claim.orderId })
+      await sendPushToUser(claim.userId, { title: "Respondimos a tu reclamo", body: input.resolution.slice(0, 120), url: claim.reporterRole === "business" ? "/panel" : claim.reporterRole === "courier" ? "/repartidor" : `/pedido/${claim.orderId}`, orderId: claim.orderId })
         .catch((error) => console.error("Error avisando respuesta de reclamo:", error));
       return { ok: true };
     }),
