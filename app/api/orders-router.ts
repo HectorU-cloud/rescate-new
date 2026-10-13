@@ -9,7 +9,7 @@ import { notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-n
 import { isBusinessOpenNow, isPackReservable, quoteDelivery } from "./lib/business-rules";
 import { logOrderEvent } from "./lib/order-events";
 import { recomputeBusinessRating, recomputeCourierRating } from "./lib/ratings";
-import { BUSINESS_RULES } from "@contracts/constants";
+import { canCustomerCancel } from "./lib/order-rules";
 import { getDb } from "./queries/connection";
 import {
   businesses,
@@ -421,8 +421,7 @@ export const ordersRouter = createRouter({
       if (!order || order.customerId !== ctx.user.id) {
         throw new TRPCError({ code: "FORBIDDEN", message: "No puedes cancelar este pedido" });
       }
-      const cancelable = BUSINESS_RULES.customerCancelableStatuses as readonly string[];
-      if (!cancelable.includes(order.status)) {
+      if (!canCustomerCancel(order.status)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: order.status === "cancelled"

@@ -6,10 +6,10 @@ import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
 import { logOrderEvent } from "./lib/order-events";
+import { MAX_ACTIVE_DELIVERIES, canCourierRelease, hasReachedActiveLimit } from "./lib/order-rules";
 import { BUSINESS_RULES } from "@contracts/constants";
 import { businesses, courierLocations, orderItems, orders, users } from "@db/schema";
 
-const MAX_ACTIVE_DELIVERIES = 2;
 
 export const courierRouter = createRouter({
   // El navegador/app del repartidor envía su posición mientras una entrega está activa.
@@ -86,7 +86,7 @@ export const courierRouter = createRouter({
       }
       const [active] = await db.select({ count: sql<number>`count(*)` }).from(orders)
         .where(and(eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
-      if (Number(active?.count ?? 0) >= MAX_ACTIVE_DELIVERIES) {
+      if (hasReachedActiveLimit(Number(active?.count ?? 0))) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Ya llevas ${MAX_ACTIVE_DELIVERIES} entregas activas. Termina una antes de tomar otra.` });
       }
       const deliveryConfirmationCode = String(randomInt(100000, 1000000));
@@ -115,9 +115,7 @@ export const courierRouter = createRouter({
         where: and(eq(orders.id, input.orderId), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up"), eq(orders.type, "delivery")),
       });
       if (!order) throw new TRPCError({ code: "BAD_REQUEST", message: "No tienes este pedido activo" });
-      const acceptedAt = order.courierAcceptedAt ? new Date(order.courierAcceptedAt).getTime() : 0;
-      const windowMs = BUSINESS_RULES.courierReleaseWindowMin * 60_000;
-      if (!acceptedAt || Date.now() - acceptedAt > windowMs) {
+      if (!canCourierRelease(order.courierAcceptedAt)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Solo puedes soltar un pedido durante los primeros ${BUSINESS_RULES.courierReleaseWindowMin} minutos. Si hay un problema, contacta al soporte.` });
       }
       const [res] = await db.update(orders).set({
