@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
-import { money, timeAgo } from "@/lib/format";
+import { money, timeAgo, withinMinutes } from "@/lib/format";
 import { toast } from "sonner";
+import { BUSINESS_RULES } from "@contracts/constants";
 
 export default function CourierPanel() {
   const { user, isAuthenticated } = useAuth({
@@ -60,6 +61,19 @@ export default function CourierPanel() {
     },
     onError: (e) => toast.error(e.message),
   });
+  const availability = trpc.courier.availability.useQuery(undefined, { enabled });
+  const setAvailability = trpc.courier.setAvailability.useMutation({
+    onSuccess: () => utils.courier.availability.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const release = trpc.courier.release.useMutation({
+    onSuccess: () => {
+      toast.success("Pedido liberado: se avisó a otros repartidores");
+      utils.courier.invalidate();
+      utils.orders.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const deliver = trpc.courier.markDelivered.useMutation({
     onSuccess: (_result, variables) => {
       setConfirmationCodes((current) => ({ ...current, [variables.orderId]: "" }));
@@ -105,6 +119,16 @@ export default function CourierPanel() {
           <span>El 100% del envío es tuyo</span>
         </div>
       </section>
+
+      {/* Disponibilidad para recibir avisos */}
+      <button
+        onClick={() => setAvailability.mutate({ available: !availability.data?.available })}
+        disabled={setAvailability.isPending || availability.isLoading}
+        className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-sm font-extrabold ring-1 ring-border ${availability.data?.available ? "bg-brand-soft text-brand-dark" : "bg-card text-muted-foreground"}`}
+      >
+        <span>{availability.data?.available ? "🟢 Disponible: recibes avisos de pedidos nuevos" : "⚫ No disponible: no recibirás avisos"}</span>
+        <span className="text-xs underline">Cambiar</span>
+      </button>
 
       {/* En curso */}
       {active.length > 0 && (
@@ -162,6 +186,19 @@ export default function CourierPanel() {
                 />
                 <p className="mt-1 text-xs text-muted-foreground">Pide el código al cliente cuando le entregues el pedido.</p>
               </div>
+              {withinMinutes(order.courierAcceptedAt, BUSINESS_RULES.courierReleaseWindowMin) && (
+                <button
+                  disabled={release.isPending}
+                  onClick={() => {
+                    const reason = window.prompt("¿Por qué sueltas este pedido? (mínimo 5 caracteres)");
+                    if (reason === null) return;
+                    release.mutate({ orderId: order.id, reason: reason.trim() });
+                  }}
+                  className="mt-3 w-full rounded-xl border border-destructive py-2.5 text-xs font-extrabold text-destructive disabled:opacity-50"
+                >
+                  Soltar pedido (solo los primeros {BUSINESS_RULES.courierReleaseWindowMin} min)
+                </button>
+              )}
               <button
                 disabled={deliver.isPending || (confirmationCodes[order.id] ?? "").length !== 6}
                 onClick={() => deliver.mutate({ orderId: order.id, confirmationCode: confirmationCodes[order.id] ?? "" })}
@@ -206,7 +243,7 @@ export default function CourierPanel() {
                   </span>
                 </p>
                 <p className="truncate text-xs font-semibold text-muted-foreground">
-                  📍 {order.deliveryAddress}
+                  📍 {order.deliveryAddress}{order.deliveryDistanceKm != null ? ` · ${order.deliveryDistanceKm} km` : ""}
                 </p>
               </div>
               <button

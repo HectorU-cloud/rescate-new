@@ -14,6 +14,13 @@ export function timeAgo(date: Date | string): string {
   return `hace ${Math.floor(h / 24)} d`;
 }
 
+/** ¿Pasaron como máximo `minutes` minutos desde `date`? */
+export function withinMinutes(date: Date | string | null | undefined, minutes: number): boolean {
+  if (!date) return false;
+  const d = typeof date === "string" ? new Date(date) : date;
+  return Date.now() - d.getTime() <= minutes * 60_000;
+}
+
 export function statusIndex(flow: OrderStatusKey[], status: string): number {
   if (status === "cancelled") return -1;
   return flow.indexOf(status as OrderStatusKey);

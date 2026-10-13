@@ -3,7 +3,7 @@ import type { Business, RescuePack } from "@db/schema";
 import { money } from "@/lib/format";
 import { CATEGORY_LABELS } from "@/lib/format";
 
-export function BusinessCard({ business }: { business: Business }) {
+export function BusinessCard({ business }: { business: Business & { openNow: boolean } }) {
   return (
     <Link
       to={`/negocio/${business.id}`}
@@ -13,7 +13,7 @@ export function BusinessCard({ business }: { business: Business }) {
         <span className="drop-shadow-sm transition-transform group-hover:scale-110">
           {business.emoji}
         </span>
-        {!business.isOpen && (
+        {!business.openNow && (
           <span className="absolute left-3 top-3 rounded-full bg-foreground px-2.5 py-1 text-[11px] font-bold text-white">
             Cerrado
           </span>
@@ -32,7 +32,7 @@ export function BusinessCard({ business }: { business: Business }) {
         </p>
         <div className="mt-auto flex items-center gap-3 pt-2 text-xs font-bold text-foreground/80">
           <span>🛵 {business.deliveryMinutes} min</span>
-          <span>Envío {money(business.deliveryFee)}</span>
+          <span>Envío desde {money(business.deliveryFee)}</span>
         </div>
       </div>
     </Link>

@@ -30,6 +30,11 @@ export const users = mysqlTable("users", {
   courierPlate: varchar("courierPlate", { length: 20 }),
   courierBio: varchar("courierBio", { length: 300 }),
   courierApproved: boolean("courierApproved").default(false).notNull(),
+  // Revisión manual del perfil: pending → approved | rejected (con nota visible para el repartidor)
+  courierVerification: mysqlEnum("courierVerification", ["pending", "approved", "rejected"]).default("pending").notNull(),
+  courierReviewNote: varchar("courierReviewNote", { length: 300 }),
+  // El repartidor decide si quiere recibir avisos de pedidos nuevos
+  courierAvailable: boolean("courierAvailable").default(true).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt")
     .defaultNow()
@@ -65,14 +70,19 @@ export const businesses = mysqlTable(
     lat: double("lat").notNull(),
     lng: double("lng").notNull(),
     phone: varchar("phone", { length: 30 }),
-  courierPhotoUrl: text("courierPhotoUrl"),
-  courierVehicle: varchar("courierVehicle", { length: 80 }),
-  courierPlate: varchar("courierPlate", { length: 20 }),
-  courierBio: varchar("courierBio", { length: 300 }),
-  courierApproved: boolean("courierApproved").default(false).notNull(),
     emoji: varchar("emoji", { length: 8 }).default("🍽️").notNull(),
     isOpen: boolean("isOpen").default(true).notNull(),
+    // Tarifa de envío = deliveryFee (base) + feePerKm × distancia estimada
     deliveryFee: double("deliveryFee").default(1).notNull(),
+    feePerKm: double("feePerKm").default(0.25).notNull(),
+    deliveryRadiusKm: double("deliveryRadiusKm").default(5).notNull(),
+    minOrder: double("minOrder").default(0).notNull(),
+    // Horario de atención en hora de Ecuador (HH:MM). Si cierra antes de abrir, cruza la medianoche.
+    opensAt: varchar("opensAt", { length: 5 }).default("08:00").notNull(),
+    closesAt: varchar("closesAt", { length: 5 }).default("22:00").notNull(),
+    // Los comercios nuevos entran como "pending" y no se muestran hasta que un admin los apruebe.
+    approvalStatus: mysqlEnum("approvalStatus", ["pending", "approved", "rejected"]).default("approved").notNull(),
+    approvalNote: varchar("approvalNote", { length: 300 }),
     deliveryMinutes: int("deliveryMinutes").default(30).notNull(),
     rating: double("rating").default(4.5).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -186,6 +196,15 @@ export const orders = mysqlTable(
     deliveryConfirmationCode: varchar("deliveryConfirmationCode", { length: 6 }), // código privado para confirmar delivery
     customerName: varchar("customerName", { length: 150 }),
     customerPhone: varchar("customerPhone", { length: 30 }),
+    // Distancia estimada comercio → cliente usada para calcular la tarifa
+    deliveryDistanceKm: double("deliveryDistanceKm"),
+    // Momento en que quedó "listo" (para el tiempo límite de espera de repartidor)
+    readyAt: timestamp("readyAt"),
+    courierReminderSentAt: timestamp("courierReminderSentAt"),
+    courierAcceptedAt: timestamp("courierAcceptedAt"),
+    deliveredAt: timestamp("deliveredAt"),
+    cancelledBy: mysqlEnum("cancelledBy", ["customer", "business", "admin", "system"]),
+    cancelReason: varchar("cancelReason", { length: 300 }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt")
       .defaultNow()
@@ -247,3 +266,44 @@ export const pushTokens = mysqlTable(
 );
 
 export type PushToken = typeof pushTokens.$inferSelect;
+
+
+// Historial de eventos del pedido (auditoría): quién hizo qué y cuándo.
+export const orderEvents = mysqlTable(
+  "order_events",
+  {
+    id: serial("id").primaryKey(),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
+    actorId: bigint("actorId", { mode: "number", unsigned: true }),
+    actorRole: varchar("actorRole", { length: 20 }).notNull(), // customer | business | courier | admin | system
+    type: varchar("type", { length: 40 }).notNull(), // status:ready, courier_released, expired, admin_cancel...
+    detail: varchar("detail", { length: 300 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ orderIdx: index("evt_order_idx").on(t.orderId) }),
+);
+
+export type OrderEvent = typeof orderEvents.$inferSelect;
+
+// Reclamos de clientes, comercios o repartidores sobre un pedido.
+export const claims = mysqlTable(
+  "claims",
+  {
+    id: serial("id").primaryKey(),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    reporterRole: mysqlEnum("reporterRole", ["customer", "business", "courier"]).notNull(),
+    reason: varchar("reason", { length: 500 }).notNull(),
+    status: mysqlEnum("status", ["open", "resolved", "rejected"]).default("open").notNull(),
+    resolution: varchar("resolution", { length: 500 }),
+    resolvedBy: bigint("resolvedBy", { mode: "number", unsigned: true }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    resolvedAt: timestamp("resolvedAt"),
+  },
+  (t) => ({
+    orderIdx: index("claim_order_idx").on(t.orderId),
+    statusIdx: index("claim_status_idx").on(t.status),
+  }),
+);
+
+export type Claim = typeof claims.$inferSelect;

@@ -4,14 +4,17 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
+import { BUSINESS_RULES } from "@contracts/constants";
 import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
-import { notifyOrderStatus } from "./lib/push-notifications";
+import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUsers } from "./lib/push-notifications";
+import { logOrderEvent } from "./lib/order-events";
 import {
   businesses,
   orderItems,
   orders,
   products,
   rescuePacks,
+  users,
   type OrderStatus,
 } from "@db/schema";
 
@@ -70,6 +73,12 @@ export const businessRouter = createRouter({
         emoji: z.string().max(8).optional(),
         deliveryFee: z.number().min(0).max(20),
         deliveryMinutes: z.number().min(5).max(120),
+        // Reglas de entrega (opcionales para no romper formularios existentes)
+        feePerKm: z.number().min(0).max(5).optional(),
+        deliveryRadiusKm: z.number().min(0.5).max(BUSINESS_RULES.maxDeliveryRadiusKm).optional(),
+        minOrder: z.number().min(0).max(200).optional(),
+        opensAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM)").optional(),
+        closesAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM)").optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -80,7 +89,8 @@ export const businessRouter = createRouter({
       if (existing) {
         await db
           .update(businesses)
-          .set(input)
+          // Un comercio rechazado que corrige sus datos vuelve a revisión.
+          .set({ ...input, ...(existing.approvalStatus === "rejected" ? { approvalStatus: "pending" as const, approvalNote: null } : {}) })
           .where(eq(businesses.id, existing.id));
         return { id: existing.id };
       }
@@ -91,15 +101,39 @@ export const businessRouter = createRouter({
           ownerId: ctx.user.id,
           lat: -2.134 + (Math.random() - 0.5) * 0.01,
           lng: -79.594 + (Math.random() - 0.5) * 0.01,
+          approvalStatus: "pending",
         })
         .$returningId();
+      const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+      await sendPushToUsers(admins.map((a) => a.id), { title: "Nuevo comercio por aprobar 🏪", body: `${input.name} solicita publicarse.`, url: "/admin" }).catch(() => undefined);
       return { id };
+    }),
+
+  // Reglas de entrega y horario (sin tocar el resto de datos del local)
+  updateRules: authedQuery
+    .input(
+      z.object({
+        deliveryFee: z.number().min(0).max(20),
+        feePerKm: z.number().min(0).max(5),
+        deliveryRadiusKm: z.number().min(0.5).max(BUSINESS_RULES.maxDeliveryRadiusKm),
+        minOrder: z.number().min(0).max(200),
+        opensAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM)"),
+        closesAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM)"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      await getDb().update(businesses).set(input).where(eq(businesses.id, biz.id));
+      return { ok: true };
     }),
 
   toggleOpen: authedQuery
     .input(z.object({ isOpen: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
+      if (input.isOpen && biz.approvalStatus !== "approved") {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Tu negocio aún no ha sido aprobado por el equipo." });
+      }
       await getDb()
         .update(businesses)
         .set({ isOpen: input.isOpen })
@@ -140,7 +174,7 @@ export const businessRouter = createRouter({
     }),
 
   updateOrderStatus: authedQuery
-    .input(z.object({ orderId: z.number().int().positive(), status: z.string() }))
+    .input(z.object({ orderId: z.number().int().positive(), status: z.string(), reason: z.string().trim().max(300).optional() }))
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
       const db = getDb();
@@ -162,12 +196,21 @@ export const businessRouter = createRouter({
       }
       if (next === "cancelled") {
         // Si era un rescate, devuelve el stock del pack
-        await cancelOrderAndRestock(order.id, ["pending", "accepted"]);
-        await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "cancelled", type: order.type });
+        await cancelOrderAndRestock(order.id, ["pending", "accepted"], { by: "business", reason: input.reason });
+        await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: "cancelled", detail: input.reason });
+        await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "cancelled", type: order.type, reason: input.reason });
         return { ok: true };
       }
-      await db.update(orders).set({ status: next }).where(eq(orders.id, order.id));
+      const [res] = await db.update(orders).set({
+        status: next,
+        ...(next === "ready" ? { readyAt: new Date(), courierReminderSentAt: null } : {}),
+        ...(next === "delivered" ? { deliveredAt: new Date() } : {}),
+      }).where(and(eq(orders.id, order.id), eq(orders.status, order.status))); // evita carreras con cancelaciones
+      if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido cambió de estado. Actualiza la pantalla." });
+      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: `status:${next}` });
       await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: next, type: order.type });
+      // Pedido de delivery listo: avisar a los repartidores disponibles
+      if (next === "ready" && order.type === "delivery") await notifyCouriersOrderReady(order.id);
       return { ok: true };
     }),
 

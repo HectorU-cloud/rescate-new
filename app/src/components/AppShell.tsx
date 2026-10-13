@@ -30,7 +30,7 @@ function useNavItems(): NavItem[] {
       { to: "/", label: "Explorar", icon: "🧭" },
       { to: "/rescate", label: "Rescate", icon: "🧡" },
       { to: "/perfil", label: "Perfil", icon: "👤" },
-      ...(user?.role === "admin" ? [{ to: "/admin/repartidores", label: "Admin", icon: "🛡️" }] : []),
+      ...(user?.role === "admin" ? [{ to: "/admin", label: "Admin", icon: "🛡️" }] : []),
     ];
   }
   if (role === "courier") {
@@ -39,7 +39,7 @@ function useNavItems(): NavItem[] {
       { to: "/", label: "Explorar", icon: "🧭" },
       { to: "/rescate", label: "Rescate", icon: "🧡" },
       { to: "/perfil", label: "Perfil", icon: "👤" },
-      ...(user?.role === "admin" ? [{ to: "/admin/repartidores", label: "Admin", icon: "🛡️" }] : []),
+      ...(user?.role === "admin" ? [{ to: "/admin", label: "Admin", icon: "🛡️" }] : []),
     ];
   }
   const customerItems: NavItem[] = [
@@ -48,7 +48,7 @@ function useNavItems(): NavItem[] {
     { to: "/pedidos", label: "Pedidos", icon: "🧾" },
     { to: "/perfil", label: "Perfil", icon: "👤" },
   ];
-  return user?.role === "admin" ? [...customerItems, { to: "/admin/repartidores", label: "Admin", icon: "🛡️" }] : customerItems;
+  return user?.role === "admin" ? [...customerItems, { to: "/admin", label: "Admin", icon: "🛡️" }] : customerItems;
 }
 
 export default function AppShell({ children }: { children: React.ReactNode }) {

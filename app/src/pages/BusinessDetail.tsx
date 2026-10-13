@@ -81,12 +81,15 @@ export default function BusinessDetail() {
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs font-bold text-foreground/80">
             <span>📍 {business.address}</span>
             <span>🛵 {business.deliveryMinutes} min aprox.</span>
-            <span>Envío {money(business.deliveryFee)}</span>
+            <span>Envío desde {money(business.deliveryFee)}</span>
+            <span>🕒 {business.opensAt}–{business.closesAt}</span>
+            <span>Radio {business.deliveryRadiusKm} km</span>
+            {business.minOrder > 0 && <span>Mínimo {money(business.minOrder)}</span>}
             <span>{CATEGORY_LABELS[business.category] ?? business.category}</span>
           </div>
-          {!business.isOpen && (
+          {!business.openNow && (
             <p className="mt-3 rounded-xl bg-destructive/10 px-3 py-2 text-sm font-bold text-destructive">
-              Este local está cerrado ahora mismo
+              Este local está cerrado ahora mismo (atiende de {business.opensAt} a {business.closesAt})
             </p>
           )}
           {cart && !cartFromHere && (
@@ -147,7 +150,7 @@ export default function BusinessDetail() {
                 </p>
               </div>
               <button
-                disabled={!business.isOpen}
+                disabled={!business.openNow}
                 onClick={() => {
                   add(
                     {
@@ -221,7 +224,7 @@ export default function BusinessDetail() {
                       </span>
                     </div>
                     <button
-                      disabled={pending || !business.isOpen}
+                      disabled={pending || !business.openNow}
                       onClick={() => {
                         if (!isAuthenticated) {
                           navigate("/login");

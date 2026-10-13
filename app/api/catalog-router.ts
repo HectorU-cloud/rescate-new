@@ -3,6 +3,9 @@ import { and, desc, eq, gt } from "drizzle-orm";
 import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { businesses, products, rescuePacks } from "@db/schema";
+import { isBusinessOpenNow } from "./lib/business-rules";
+
+const withOpenNow = <T extends { isOpen: boolean; opensAt: string; closesAt: string }>(b: T) => ({ ...b, openNow: isBusinessOpenNow(b) });
 
 export const catalogRouter = createRouter({
   // Lista de comercios, opcionalmente filtrados por categoría o búsqueda
@@ -17,7 +20,8 @@ export const catalogRouter = createRouter({
     )
     .query(async ({ input }) => {
       const db = getDb();
-      const rows = await db.select().from(businesses).orderBy(desc(businesses.rating));
+      // Solo comercios aprobados por el equipo son visibles al público.
+      const rows = await db.select().from(businesses).where(eq(businesses.approvalStatus, "approved")).orderBy(desc(businesses.rating));
       let out = rows;
       if (input?.category) {
         out = out.filter((b) => b.category === input.category);
@@ -30,17 +34,20 @@ export const catalogRouter = createRouter({
             (b.description ?? "").toLowerCase().includes(q),
         );
       }
-      return out;
+      return out.map(withOpenNow);
     }),
 
   businessDetail: publicQuery
     .input(z.object({ id: z.number() }))
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       const db = getDb();
       const business = await db.query.businesses.findFirst({
         where: eq(businesses.id, input.id),
       });
       if (!business) return null;
+      // Un comercio sin aprobar solo lo ven su dueño y los administradores.
+      const canSeeUnapproved = ctx.user && (ctx.user.id === business.ownerId || ctx.user.role === "admin");
+      if (business.approvalStatus !== "approved" && !canSeeUnapproved) return null;
       const prods = await db
         .select()
         .from(products)
@@ -55,7 +62,7 @@ export const catalogRouter = createRouter({
             gt(rescuePacks.quantityLeft, 0),
           ),
         );
-      return { business, products: prods, rescuePacks: packs };
+      return { business: withOpenNow(business), products: prods, rescuePacks: packs };
     }),
 
   // Todos los packs de rescate activos (sección "Rescate")
@@ -70,6 +77,6 @@ export const catalogRouter = createRouter({
     const byId = new Map(bizRows.map((b) => [b.id, b]));
     return packs
       .map((p) => ({ pack: p, business: byId.get(p.businessId) ?? null }))
-      .filter((r) => r.business !== null);
+      .filter((r) => r.business !== null && r.business.approvalStatus === "approved");
   }),
 });

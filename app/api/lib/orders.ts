@@ -12,11 +12,12 @@ import { orderItems, orders, rescuePacks, type OrderStatus } from "@db/schema";
 export async function cancelOrderAndRestock(
   orderId: number,
   allowedFrom: OrderStatus[],
+  meta: { by?: "customer" | "business" | "admin" | "system"; reason?: string } = {},
 ) {
   await getDb().transaction(async (tx) => {
     const [res] = await tx
       .update(orders)
-      .set({ status: "cancelled" })
+      .set({ status: "cancelled", cancelledBy: meta.by ?? null, cancelReason: meta.reason?.slice(0, 300) ?? null })
       .where(and(eq(orders.id, orderId), inArray(orders.status, allowedFrom)));
     if (res.affectedRows === 0) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Ya no se puede cancelar" });

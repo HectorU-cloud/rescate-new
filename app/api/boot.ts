@@ -10,8 +10,12 @@ import { devLoginHandler } from "./auth/dev-login";
 import { emailRegister, emailLogin, verifyEmail, requestPasswordReset, resetPassword } from "./auth/email";
 import { Paths } from "@contracts/constants";
 import { rateLimit } from "./lib/rate-limit";
+import { startMaintenance } from "./lib/maintenance";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
+
+// Cancela pedidos vencidos y recuerda a los repartidores (cada minuto).
+startMaintenance();
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
 app.get(Paths.googleLogin, googleLoginHandler());

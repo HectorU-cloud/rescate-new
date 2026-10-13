@@ -104,3 +104,24 @@ export const APP_ROLES = [
 ] as const;
 
 export type AppRole = (typeof APP_ROLES)[number]["id"];
+
+// ---------------------------------------------------------------------------
+// Reglas de negocio del delivery (únicas, compartidas frontend ↔ backend)
+// ---------------------------------------------------------------------------
+export const BUSINESS_RULES = {
+  // Zona horaria de Ecuador continental (UTC-5, sin horario de verano)
+  timezoneOffsetHours: -5,
+  // Factor para convertir distancia en línea recta a distancia estimada por calles
+  routeFactor: 1.3,
+  maxDeliveryRadiusKm: 15,
+  // Minutos máximos que un pedido "listo" espera repartidor antes de cancelarse solo
+  courierAssignTimeoutMin: 20,
+  // A los X minutos sin repartidor se vuelve a avisar a los repartidores
+  courierReminderAfterMin: 8,
+  // Minutos máximos que un pedido "pendiente" espera que el comercio lo acepte
+  businessAcceptTimeoutMin: 15,
+  // El repartidor solo puede soltar un pedido en estos minutos tras tomarlo
+  courierReleaseWindowMin: 5,
+  // Estados en los que el cliente todavía puede cancelar
+  customerCancelableStatuses: ["pending", "accepted"],
+} as const;

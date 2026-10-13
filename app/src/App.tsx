@@ -13,6 +13,8 @@ import BusinessPanel from "./pages/BusinessPanel";
 import CourierPanel from "./pages/CourierPanel";
 import Profile from "./pages/Profile";
 import AdminCouriers from "./pages/AdminCouriers";
+import AdminCourierReview from "./pages/AdminCourierReview";
+import AdminDashboard from "./pages/AdminDashboard";
 
 export default function App() {
   return (
@@ -33,7 +35,9 @@ export default function App() {
               <Route path="/panel" element={<BusinessPanel />} />
               <Route path="/repartidor" element={<CourierPanel />} />
               <Route path="/perfil" element={<Profile />} />
+              <Route path="/admin" element={<AdminDashboard />} />
               <Route path="/admin/repartidores" element={<AdminCouriers />} />
+              <Route path="/admin/verificacion" element={<AdminCourierReview />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </AppShell>

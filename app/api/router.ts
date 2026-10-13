@@ -1,3 +1,4 @@
+import { adminRouter } from "./admin-router";
 import { authRouter } from "./auth-router";
 import { businessRouter } from "./business-router";
 import { catalogRouter } from "./catalog-router";
@@ -16,6 +17,7 @@ export const appRouter = createRouter({
   orders: ordersRouter,
   business: businessRouter,
   courier: courierRouter,
+  admin: adminRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -1,7 +1,7 @@
 import { importPKCS8, SignJWT } from "jose";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../queries/connection";
-import { pushTokens } from "@db/schema";
+import { businesses, orders, pushTokens, users } from "@db/schema";
 
 const FIREBASE_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 type ServiceAccount = { project_id: string; client_email: string; private_key: string; token_uri?: string };
@@ -83,7 +83,7 @@ export async function sendPushToUser(userId: number, notification: { title: stri
   return { sent, skipped: false };
 }
 
-export async function notifyOrderStatus(args: { customerId: number; orderId: number; code: string; status: string; type: "delivery" | "rescue" }) {
+export async function notifyOrderStatus(args: { customerId: number; orderId: number; code: string; status: string; type: "delivery" | "rescue"; reason?: string }) {
   const details: Record<string, { title: string; body: string }> = {
     pending: { title: "Pedido recibido 🧾", body: `Recibimos tu pedido ${args.code}. Avisaremos cuando el local lo confirme.` },
     accepted: args.type === "rescue" ? { title: "Pack reservado 🧡", body: `Tu pack ${args.code} quedó reservado para retirar en el local.` } : { title: "Pedido confirmado ✅", body: `El local confirmó tu pedido ${args.code}.` },
@@ -91,7 +91,7 @@ export async function notifyOrderStatus(args: { customerId: number; orderId: num
     ready: { title: args.type === "rescue" ? "Tu pack está listo 🧡" : "Tu pedido está listo 🍽️", body: args.type === "rescue" ? `Tu pack ${args.code} está listo para retirar.` : `El pedido ${args.code} está listo para el repartidor.` },
     picked_up: { title: "¡Tu pedido va en camino! 🛵", body: `El repartidor recogió tu pedido ${args.code}.` },
     delivered: { title: "Pedido entregado 🎉", body: `El pedido ${args.code} figura como entregado. ¡Gracias por usar Rescate!` },
-    cancelled: { title: "Pedido cancelado", body: `El pedido ${args.code} fue cancelado.` },
+    cancelled: { title: "Pedido cancelado", body: `El pedido ${args.code} fue cancelado.${args.reason ? ` Motivo: ${args.reason}` : ""}` },
   };
   const message = details[args.status];
   if (!message) return;
@@ -100,5 +100,55 @@ export async function notifyOrderStatus(args: { customerId: number; orderId: num
   } catch (error) {
     // Push is best-effort and must not make a successful order operation fail.
     console.error("Error enviando notificación de pedido:", error);
+  }
+}
+
+/** Envía una notificación a varios usuarios sin que un fallo individual afecte a los demás. */
+export async function sendPushToUsers(userIds: number[], notification: { title: string; body: string; url?: string; orderId?: number }) {
+  const unique = [...new Set(userIds)];
+  let sent = 0;
+  // Lotes pequeños para no saturar FCM ni la base de datos.
+  for (let i = 0; i < unique.length; i += 10) {
+    const results = await Promise.allSettled(unique.slice(i, i + 10).map((id) => sendPushToUser(id, notification)));
+    for (const r of results) {
+      if (r.status === "fulfilled") sent += r.value.sent;
+      else console.error("Error enviando push a un usuario:", r.reason);
+    }
+  }
+  return { recipients: unique.length, sent };
+}
+
+/** IDs de repartidores aprobados que están disponibles para recibir pedidos. */
+export async function availableCourierIds() {
+  const rows = await getDb().select({ id: users.id }).from(users).where(and(
+    eq(users.appRole, "courier"),
+    eq(users.courierApproved, true),
+    eq(users.courierAvailable, true),
+  ));
+  return rows.map((r) => r.id);
+}
+
+/** Avisa a los repartidores que hay un pedido listo para recoger. */
+export async function notifyCouriersOrderReady(orderId: number, opts: { reminder?: boolean } = {}) {
+  try {
+    const db = getDb();
+    const [order] = await db.select().from(orders).where(and(eq(orders.id, orderId), eq(orders.status, "ready"), isNull(orders.courierId))).limit(1);
+    if (!order || order.type !== "delivery") return { recipients: 0, sent: 0 };
+    const [biz] = await db.select().from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
+    const ids = await availableCourierIds();
+    if (!ids.length) return { recipients: 0, sent: 0 };
+    const place = biz?.name ?? "un local";
+    const fee = order.deliveryFee.toFixed(2);
+    const distance = order.deliveryDistanceKm != null ? ` · ${order.deliveryDistanceKm} km` : "";
+    return await sendPushToUsers(ids, {
+      title: opts.reminder ? "⏰ Pedido esperando repartidor" : "🛵 Nuevo pedido listo para recoger",
+      body: `${place} · ganas $${fee}${distance}. Toca para tomarlo.`,
+      url: "/repartidor",
+      orderId: order.id,
+    });
+  } catch (error) {
+    // Best-effort: el pedido ya cambió de estado y no debe fallar por el push.
+    console.error("Error avisando a repartidores:", error);
+    return { recipients: 0, sent: 0 };
   }
 }

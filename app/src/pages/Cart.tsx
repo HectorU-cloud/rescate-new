@@ -16,6 +16,12 @@ export default function Cart() {
   const [deliveryCoords, setDeliveryCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locating, setLocating] = useState(false);
 
+  // El servidor calcula distancia, radio y tarifa; aquí solo se muestra la cotización.
+  const quote = trpc.orders.quote.useQuery(
+    { businessId: cart?.businessId ?? 0, lat: deliveryCoords?.lat ?? 0, lng: deliveryCoords?.lng ?? 0 },
+    { enabled: isAuthenticated && !!cart && !!deliveryCoords, retry: false },
+  );
+
   const createOrder = trpc.orders.createDelivery.useMutation({
     onSuccess: (data) => {
       clear();
@@ -45,7 +51,25 @@ export default function Cart() {
     );
   }
 
-  const total = subtotal + cart.deliveryFee;
+  const q = quote.data;
+  const deliveryFee = q?.fee ?? cart.deliveryFee;
+  const total = subtotal + deliveryFee;
+  const belowMin = !!q && subtotal < q.minOrder;
+  const blockReason = !deliveryCoords
+    ? "Comparte tu ubicación para calcular el envío"
+    : quote.isLoading
+      ? "Calculando envío…"
+      : quote.error
+        ? quote.error.message
+        : q && !q.withinRadius
+          ? `Estás a ${q.distanceKm} km y este local entrega hasta ${q.radiusKm} km`
+          : q && !q.openNow
+            ? `El local está cerrado (atiende de ${q.opensAt} a ${q.closesAt})`
+            : belowMin
+              ? `El pedido mínimo es ${money(q!.minOrder)}`
+              : address.trim().length < 5
+                ? "Escribe tu dirección para continuar"
+                : null;
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -116,7 +140,7 @@ export default function Cart() {
               (position) => {
                 setDeliveryCoords({ lat: position.coords.latitude, lng: position.coords.longitude });
                 setLocating(false);
-                toast.success("Ubicación guardada para estimar la llegada");
+                toast.success("Ubicación guardada");
               },
               (error) => {
                 setLocating(false);
@@ -127,10 +151,10 @@ export default function Cart() {
           }}
           className="w-full rounded-xl border border-brand/30 bg-brand-soft px-4 py-3 text-sm font-extrabold text-brand-dark disabled:opacity-50"
         >
-          {locating ? "Obteniendo ubicación…" : deliveryCoords ? "✓ Ubicación de entrega guardada" : "📍 Usar mi ubicación para estimar la llegada (opcional)"}
+          {locating ? "Obteniendo ubicación…" : deliveryCoords ? "✓ Ubicación de entrega guardada" : "📍 Usar mi ubicación (necesaria para calcular el envío)"}
         </button>
         <p className="text-[11px] text-muted-foreground">
-          La ubicación es opcional y se usa para calcular una ETA aproximada. Verifica que coincida con la dirección escrita.
+          La ubicación se usa para calcular la distancia, el costo de envío y la llegada estimada. Verifica que coincida con la dirección escrita.
         </p>
         <input
           value={phone}
@@ -153,9 +177,16 @@ export default function Cart() {
           <span>{money(subtotal)}</span>
         </div>
         <div className="flex justify-between text-sm font-semibold text-muted-foreground">
-          <span>Envío (va para el repartidor)</span>
-          <span>{money(cart.deliveryFee)}</span>
+          <span>
+            Envío (va para el repartidor){q ? ` · ${q.distanceKm} km` : ""}
+          </span>
+          <span>{q ? money(deliveryFee) : "—"}</span>
         </div>
+        {q && q.minOrder > 0 && (
+          <p className={`text-xs font-bold ${belowMin ? "text-destructive" : "text-muted-foreground"}`}>
+            Pedido mínimo: {money(q.minOrder)}
+          </p>
+        )}
         <div className="flex justify-between border-t border-border pt-2 font-display text-lg font-extrabold">
           <span>Total</span>
           <span>{money(total)}</span>
@@ -166,7 +197,7 @@ export default function Cart() {
       </section>
 
       <button
-        disabled={createOrder.isPending || address.trim().length < 5}
+        disabled={createOrder.isPending || (isAuthenticated && blockReason !== null)}
         onClick={() => {
           if (!isAuthenticated) {
             navigate("/login");
@@ -179,8 +210,8 @@ export default function Cart() {
               quantity: i.quantity,
             })),
             deliveryAddress: address.trim(),
-            deliveryLat: deliveryCoords?.lat,
-            deliveryLng: deliveryCoords?.lng,
+            deliveryLat: deliveryCoords!.lat,
+            deliveryLng: deliveryCoords!.lng,
             notes: notes.trim() || undefined,
             customerPhone: phone.trim() || undefined,
           });
@@ -193,10 +224,8 @@ export default function Cart() {
             ? `Confirmar pedido · ${money(total)}`
             : "Entra para confirmar tu pedido"}
       </button>
-      {address.trim().length < 5 && (
-        <p className="text-center text-xs font-bold text-muted-foreground">
-          Escribe tu dirección para continuar
-        </p>
+      {isAuthenticated && blockReason && (
+        <p className="text-center text-xs font-bold text-muted-foreground">{blockReason}</p>
       )}
     </div>
   );

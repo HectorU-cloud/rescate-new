@@ -5,15 +5,20 @@ import { randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
-import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
+import { notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
+import { isBusinessOpenNow, quoteDelivery } from "./lib/business-rules";
+import { logOrderEvent } from "./lib/order-events";
+import { BUSINESS_RULES } from "@contracts/constants";
 import { getDb } from "./queries/connection";
 import {
   businesses,
+  claims,
   courierLocations,
   orderItems,
   orders,
   products,
   rescuePacks,
+  users,
 } from "@db/schema";
 
 // 6 caracteres sin ambiguos (0/O, 1/I): ~887 millones de combinaciones
@@ -60,8 +65,9 @@ export const ordersRouter = createRouter({
           .min(1)
           .max(50),
         deliveryAddress: z.string().min(5).max(300),
-        deliveryLat: z.number().min(-90).max(90).optional(),
-        deliveryLng: z.number().min(-180).max(180).optional(),
+        // Obligatorias: sin ellas no se puede calcular distancia, radio ni tarifa.
+        deliveryLat: z.number().min(-90).max(90),
+        deliveryLng: z.number().min(-180).max(180),
         notes: z.string().max(300).optional(),
         customerPhone: z.string().max(30).optional(),
       }),
@@ -71,8 +77,15 @@ export const ordersRouter = createRouter({
       const business = await db.query.businesses.findFirst({
         where: eq(businesses.id, input.businessId),
       });
-      if (!business || !business.isOpen) {
+      if (!business || business.approvalStatus !== "approved") {
         throw new TRPCError({ code: "BAD_REQUEST", message: "El local no está disponible" });
+      }
+      if (!isBusinessOpenNow(business)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `El local está cerrado. Atiende de ${business.opensAt} a ${business.closesAt}.` });
+      }
+      const quote = quoteDelivery(business, input.deliveryLat, input.deliveryLng);
+      if (!quote.withinRadius) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `Tu ubicación está a ${quote.distanceKm} km y este local entrega hasta ${quote.radiusKm} km.` });
       }
 
       const prodIds = input.items.map((i) => i.productId);
@@ -91,7 +104,11 @@ export const ordersRouter = createRouter({
         subtotal += p.price * it.quantity;
         itemRows.push({ productId: p.id, name: p.name, unitPrice: p.price, quantity: it.quantity });
       }
-      const deliveryFee = business.deliveryFee;
+      if (subtotal < business.minOrder) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `El pedido mínimo de este local es $${business.minOrder.toFixed(2)}.` });
+      }
+      // La tarifa la calcula siempre el servidor; el cliente no puede fijarla.
+      const deliveryFee = quote.fee;
       const total = subtotal + deliveryFee;
 
       const orderId = await db.transaction(async (tx) => {
@@ -107,8 +124,9 @@ export const ordersRouter = createRouter({
             deliveryFee,
             total,
             deliveryAddress: input.deliveryAddress,
-            deliveryLat: input.deliveryLat ?? null,
-            deliveryLng: input.deliveryLng ?? null,
+            deliveryLat: input.deliveryLat,
+            deliveryLng: input.deliveryLng,
+            deliveryDistanceKm: quote.distanceKm,
             notes: input.notes ?? null,
             customerName: ctx.user.name ?? "Cliente",
             customerPhone: input.customerPhone ?? ctx.user.phone ?? null,
@@ -202,6 +220,46 @@ export const ordersRouter = createRouter({
       return created;
     }),
 
+  // Cotización de envío para mostrar en el carrito antes de confirmar.
+  quote: authedQuery
+    .input(z.object({
+      businessId: z.number().int().positive(),
+      lat: z.number().min(-90).max(90),
+      lng: z.number().min(-180).max(180),
+    }))
+    .query(async ({ input }) => {
+      const business = await getDb().query.businesses.findFirst({ where: eq(businesses.id, input.businessId) });
+      if (!business || business.approvalStatus !== "approved") throw new TRPCError({ code: "NOT_FOUND", message: "El local no está disponible" });
+      return {
+        ...quoteDelivery(business, input.lat, input.lng),
+        openNow: isBusinessOpenNow(business),
+        opensAt: business.opensAt,
+        closesAt: business.closesAt,
+      };
+    }),
+
+  // Reclamo del cliente sobre su pedido (no se puede reclamar un pedido ajeno).
+  createClaim: authedQuery
+    .input(z.object({ orderId: z.number().int().positive(), reason: z.string().trim().min(10, "Cuéntanos qué pasó (mínimo 10 caracteres)").max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const order = await db.query.orders.findFirst({ where: eq(orders.id, input.orderId) });
+      if (!order || order.customerId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN", message: "No puedes reclamar este pedido" });
+      const [open] = await db.select({ id: claims.id }).from(claims).where(and(eq(claims.orderId, order.id), eq(claims.userId, ctx.user.id), eq(claims.status, "open"))).limit(1);
+      if (open) throw new TRPCError({ code: "BAD_REQUEST", message: "Ya tienes un reclamo abierto para este pedido" });
+      await db.insert(claims).values({ orderId: order.id, userId: ctx.user.id, reporterRole: "customer", reason: input.reason });
+      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "customer", type: "claim_opened", detail: input.reason });
+      const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+      await sendPushToUsers(admins.map((a) => a.id), { title: "Nuevo reclamo 🚩", body: `Pedido ${order.code}: ${input.reason.slice(0, 80)}`, url: "/admin" }).catch(() => undefined);
+      return { ok: true };
+    }),
+
+  myClaims: authedQuery
+    .input(z.object({ orderId: z.number().int().positive() }))
+    .query(async ({ ctx, input }) =>
+      getDb().select().from(claims).where(and(eq(claims.orderId, input.orderId), eq(claims.userId, ctx.user.id))).orderBy(desc(claims.createdAt)),
+    ),
+
   // Mis pedidos (cliente)
   mine: authedQuery.query(async ({ ctx }) => {
     const db = getDb();
@@ -277,7 +335,7 @@ export const ordersRouter = createRouter({
     }),
 
   cancel: authedQuery
-    .input(z.object({ id: z.number().int().positive() }))
+    .input(z.object({ id: z.number().int().positive(), reason: z.string().trim().max(300).optional() }))
     .mutation(async ({ ctx, input }) => {
       const db = getDb();
       const order = await db.query.orders.findFirst({
@@ -286,10 +344,19 @@ export const ordersRouter = createRouter({
       if (!order || order.customerId !== ctx.user.id) {
         throw new TRPCError({ code: "FORBIDDEN", message: "No puedes cancelar este pedido" });
       }
-      if (!["pending", "accepted"].includes(order.status)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Ya no se puede cancelar" });
+      const cancelable = BUSINESS_RULES.customerCancelableStatuses as readonly string[];
+      if (!cancelable.includes(order.status)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: order.status === "cancelled"
+            ? "Este pedido ya fue cancelado"
+            : "Ya no puedes cancelar: el local empezó a prepararlo. Si hay un problema, envía un reclamo.",
+        });
       }
-      await cancelOrderAndRestock(order.id, ["pending", "accepted"]);
+      await cancelOrderAndRestock(order.id, ["pending", "accepted"], { by: "customer", reason: input.reason });
+      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "customer", type: "cancelled", detail: input.reason });
+      const biz = await db.query.businesses.findFirst({ where: eq(businesses.id, order.businessId) });
+      if (biz) await sendPushToUser(biz.ownerId, { title: "Pedido cancelado por el cliente", body: `El cliente canceló ${order.code}.`, url: "/panel", orderId: order.id }).catch(() => undefined);
       return { ok: true };
     }),
 });

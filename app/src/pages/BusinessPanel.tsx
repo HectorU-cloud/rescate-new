@@ -44,7 +44,7 @@ export default function BusinessPanel() {
     return <BusinessSetup />;
   }
 
-  return <Panel businessId={myBusiness.data.id} isOpen={myBusiness.data.isOpen} businessName={myBusiness.data.name} />;
+  return <Panel businessId={myBusiness.data.id} isOpen={myBusiness.data.isOpen} businessName={myBusiness.data.name} business={myBusiness.data} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,10 +61,15 @@ function BusinessSetup() {
     emoji: "🍽️",
     deliveryFee: 1,
     deliveryMinutes: 30,
+    feePerKm: 0.25,
+    deliveryRadiusKm: 5,
+    minOrder: 0,
+    opensAt: "08:00",
+    closesAt: "22:00",
   });
   const save = trpc.business.upsertBusiness.useMutation({
     onSuccess: () => {
-      toast.success("¡Tu local está en línea!");
+      toast.success("Enviamos tu local a revisión. Te avisaremos cuando esté aprobado.");
       utils.business.myBusiness.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -138,13 +143,24 @@ function BusinessSetup() {
             min: 5,
           })}
         </div>
+        <div className="grid grid-cols-2 gap-3">
+          {field("Costo por km ($)", "feePerKm", { type: "number", min: 0, step: 0.05 })}
+          {field("Radio de entrega (km)", "deliveryRadiusKm", { type: "number", min: 0.5, max: 15, step: 0.5 })}
+          {field("Pedido mínimo ($)", "minOrder", { type: "number", min: 0, step: 0.5 })}
+          <span />
+          {field("Abre a las", "opensAt", { type: "time" })}
+          {field("Cierra a las", "closesAt", { type: "time" })}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Envío = tarifa base + costo por km según la distancia al cliente. Horario en hora de Ecuador.
+        </p>
         {field("Emoji de tu local", "emoji", { placeholder: "🍕", maxLength: 4 })}
         <button
           disabled={save.isPending || form.name.length < 2 || form.address.length < 5}
           onClick={() => save.mutate(form)}
           className="w-full rounded-2xl bg-brand py-3.5 font-display text-base font-extrabold text-white disabled:opacity-50"
         >
-          {save.isPending ? "Guardando…" : "Abrir mi local"}
+          {save.isPending ? "Guardando…" : "Enviar mi local a revisión"}
         </button>
       </div>
     </div>
@@ -160,10 +176,21 @@ function Panel({
   businessId,
   isOpen,
   businessName,
+  business,
 }: {
   businessId: number;
   isOpen: boolean;
   businessName: string;
+  business: {
+    approvalStatus: "pending" | "approved" | "rejected";
+    approvalNote: string | null;
+    deliveryFee: number;
+    feePerKm: number;
+    deliveryRadiusKm: number;
+    minOrder: number;
+    opensAt: string;
+    closesAt: string;
+  };
 }) {
   const [tab, setTab] = useState<Tab>("pedidos");
   const utils = trpc.useUtils();
@@ -195,6 +222,19 @@ function Panel({
           {isOpen ? "🟢 Abierto" : "⚫ Cerrado"}
         </button>
       </div>
+
+      {business.approvalStatus === "pending" && (
+        <p className="rounded-2xl bg-amber-100 px-4 py-3 text-sm font-bold text-amber-900">
+          ⏳ Tu local está en revisión. Aún no es visible para los clientes; te avisaremos cuando lo aprobemos.
+        </p>
+      )}
+      {business.approvalStatus === "rejected" && (
+        <p className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm font-bold text-destructive">
+          Tu local fue rechazado{business.approvalNote ? `: ${business.approvalNote}` : "."}
+        </p>
+      )}
+
+      <DeliveryRulesCard business={business} />
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -229,6 +269,80 @@ function Panel({
       {tab === "menu" && <MenuTab />}
       {tab === "rescate" && <RescueTab />}
     </div>
+  );
+}
+
+function DeliveryRulesCard({
+  business,
+}: {
+  business: { deliveryFee: number; feePerKm: number; deliveryRadiusKm: number; minOrder: number; opensAt: string; closesAt: string };
+}) {
+  const utils = trpc.useUtils();
+  const [form, setForm] = useState({
+    deliveryFee: business.deliveryFee,
+    feePerKm: business.feePerKm,
+    deliveryRadiusKm: business.deliveryRadiusKm,
+    minOrder: business.minOrder,
+    opensAt: business.opensAt,
+    closesAt: business.closesAt,
+  });
+  const save = trpc.business.updateRules.useMutation({
+    onSuccess: () => {
+      toast.success("Reglas de entrega guardadas");
+      utils.business.myBusiness.invalidate();
+      utils.catalog.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const num = (label: string, key: "deliveryFee" | "feePerKm" | "deliveryRadiusKm" | "minOrder", step: number) => (
+    <label className="block">
+      <span className="mb-1 block text-xs font-extrabold text-muted-foreground">{label}</span>
+      <input
+        type="number"
+        min={0}
+        step={step}
+        value={form[key]}
+        onChange={(e) => setForm((f) => ({ ...f, [key]: Number(e.target.value) }))}
+        className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
+      />
+    </label>
+  );
+  const time = (label: string, key: "opensAt" | "closesAt") => (
+    <label className="block">
+      <span className="mb-1 block text-xs font-extrabold text-muted-foreground">{label}</span>
+      <input
+        type="time"
+        value={form[key]}
+        onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+        className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
+      />
+    </label>
+  );
+  return (
+    <details className="rounded-2xl bg-card p-4 shadow-sm ring-1 ring-border">
+      <summary className="cursor-pointer text-sm font-extrabold">
+        ⚙️ Horario y reglas de entrega · {business.opensAt}–{business.closesAt} · radio {business.deliveryRadiusKm} km
+        {business.minOrder > 0 ? ` · mínimo ${money(business.minOrder)}` : ""}
+      </summary>
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        {time("Abre a las", "opensAt")}
+        {time("Cierra a las", "closesAt")}
+        {num("Tarifa base ($)", "deliveryFee", 0.25)}
+        {num("Costo por km ($)", "feePerKm", 0.05)}
+        {num("Radio de entrega (km)", "deliveryRadiusKm", 0.5)}
+        {num("Pedido mínimo ($)", "minOrder", 0.5)}
+      </div>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Envío = tarifa base + costo por km. Horario en hora de Ecuador; si cierras después de medianoche, pon una hora menor que la de apertura.
+      </p>
+      <button
+        disabled={save.isPending}
+        onClick={() => save.mutate(form)}
+        className="mt-3 w-full rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
+      >
+        {save.isPending ? "Guardando…" : "Guardar reglas"}
+      </button>
+    </details>
   );
 }
 
@@ -353,9 +467,11 @@ function OrdersTab({ businessId }: { businessId: number }) {
               {["pending", "accepted"].includes(order.status) && (
                 <button
                   disabled={update.isPending}
-                  onClick={() =>
-                    update.mutate({ orderId: order.id, status: "cancelled" })
-                  }
+                  onClick={() => {
+                    const reason = window.prompt("Motivo de la cancelación (el cliente lo verá):");
+                    if (reason === null) return; // el comercio se arrepintió: no cancela
+                    update.mutate({ orderId: order.id, status: "cancelled", reason: reason.trim() || undefined });
+                  }}
                   className="rounded-xl bg-secondary px-4 py-2.5 text-sm font-extrabold text-destructive"
                 >
                   Cancelar
