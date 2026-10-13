@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bayesianRating, haversineKm, isBusinessOpenNow, isPackReservable, isWithinHours, quoteDelivery } from "./business-rules";
+import { bayesianRating, haversineKm, isBusinessOpenNow, isPackReservable, isWithinHours, quoteDelivery, startOfDayEcuador } from "./business-rules";
 
 // Ecuador = UTC-5: 15:00 UTC son las 10:00 en Milagro.
 const at = (utcHour: number, utcMin = 0) => new Date(Date.UTC(2026, 0, 15, utcHour, utcMin));
@@ -99,5 +99,20 @@ describe("bayesianRating", () => {
   it("con muchas calificaciones converge al promedio real", () => {
     expect(bayesianRating(500, 100)).toBe(4.98); // cien de 5★
     expect(bayesianRating(100, 100)).toBe(1.17); // cien de 1★
+  });
+});
+
+describe("startOfDayEcuador", () => {
+  it("la medianoche de Ecuador (UTC-5) es las 05:00 UTC", () => {
+    expect(startOfDayEcuador(new Date("2026-10-13T15:00:00Z")).toISOString()).toBe("2026-10-13T05:00:00.000Z");
+  });
+  it("antes de las 05:00 UTC todavía es el día anterior en Ecuador", () => {
+    expect(startOfDayEcuador(new Date("2026-10-13T03:00:00Z")).toISOString()).toBe("2026-10-12T05:00:00.000Z");
+  });
+  it("justo a las 05:00 UTC empieza el nuevo día", () => {
+    expect(startOfDayEcuador(new Date("2026-10-13T05:00:00Z")).toISOString()).toBe("2026-10-13T05:00:00.000Z");
+  });
+  it("funciona al cambiar de mes y de año", () => {
+    expect(startOfDayEcuador(new Date("2027-01-01T02:00:00Z")).toISOString()).toBe("2026-12-31T05:00:00.000Z");
   });
 });

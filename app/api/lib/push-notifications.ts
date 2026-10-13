@@ -182,3 +182,22 @@ export async function notifyChatMessage(args: {
     console.error("Error enviando notificación de chat:", error);
   }
 }
+
+/** Recuerda al comercio que un delivery lleva mucho tiempo sin avanzar (y cuándo se cancelará solo). */
+export async function notifyBusinessStalled(args: { orderId: number; code: string; businessId: number; status: string; idleMin: number; timeoutMin: number }) {
+  try {
+    const [biz] = await getDb().select().from(businesses).where(eq(businesses.id, args.businessId)).limit(1);
+    if (!biz) return;
+    const where = args.status === "preparing" ? "en preparación" : "aceptado";
+    const left = Math.max(1, args.timeoutMin - args.idleMin);
+    await sendPushToUser(biz.ownerId, {
+      title: "⏰ Pedido sin avanzar",
+      body: `${args.code} lleva ${args.idleMin} min ${where}. Márcalo como listo o cancélalo; si no, se cancelará solo en ~${left} min.`,
+      url: "/panel",
+      orderId: args.orderId,
+    });
+  } catch (error) {
+    console.error("Error avisando al comercio de un pedido sin avanzar:", error);
+  }
+}
+

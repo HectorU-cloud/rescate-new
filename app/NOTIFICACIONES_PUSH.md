@@ -44,6 +44,7 @@ npm run dev
 
 - Al crear un pedido de delivery: confirmación al cliente y aviso de nuevo pedido al comercio.
 - Estados `accepted`, `preparing`, `ready`, `picked_up`, `delivered` y `cancelled`: aviso al cliente.
+- Delivery aceptado/en preparación que no avanza: recordatorio al comercio a los 25 min (ver `CAMBIOS_CLIENTE_NEGOCIO.md`).
 - Chat cliente–repartidor: cada mensaje nuevo avisa al otro participante (ver `CHAT_REPARTIDOR.md`).
 - El endpoint de registro requiere sesión autenticada. Los tokens inválidos que Firebase reporte como no registrados se eliminan automáticamente.
 

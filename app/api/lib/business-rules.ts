@@ -56,6 +56,13 @@ export function ecuadorMinutesNow(now = new Date()) {
   return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
 }
 
+/** Instante (UTC) en que empezó "hoy" en Ecuador (00:00 hora local). Sirve para las estadísticas del día. */
+export function startOfDayEcuador(now = new Date()) {
+  const offsetMs = BUSINESS_RULES.timezoneOffsetHours * 3600_000;
+  const shifted = new Date(now.getTime() + offsetMs);
+  return new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - offsetMs);
+}
+
 /** ¿El comercio está dentro de su horario? Soporta horarios que cruzan la medianoche. */
 export function isWithinHours(opensAt: string, closesAt: string, now = new Date()) {
   const open = toMinutes(opensAt);

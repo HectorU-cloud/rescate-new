@@ -10,6 +10,7 @@ import { isBusinessOpenNow, isPackReservable, quoteDelivery } from "./lib/busine
 import { logOrderEvent } from "./lib/order-events";
 import { recomputeBusinessRating, recomputeCourierRating } from "./lib/ratings";
 import { canCustomerCancel } from "./lib/order-rules";
+import { shouldShowCourier, toPublicCourier } from "./lib/courier-public";
 import { getDb } from "./queries/connection";
 import {
   businesses,
@@ -404,11 +405,16 @@ export const ordersRouter = createRouter({
       if (!allowed) {
         throw new TRPCError({ code: "FORBIDDEN", message: "No puedes ver este pedido" });
       }
-      // El código de confirmación solo se revela al cliente dueño del pedido.
-      if (order.customerId !== ctx.user.id) {
-        return { ...data, order: { ...order, deliveryConfirmationCode: null } };
+      // Quién lleva el pedido: solo datos públicos y solo mientras va en camino o ya fue entregado.
+      // El propio repartidor no lo necesita.
+      let courier: ReturnType<typeof toPublicCourier> | null = null;
+      if (shouldShowCourier(order) && order.courierId !== ctx.user.id) {
+        const [row] = await db.select().from(users).where(eq(users.id, order.courierId!)).limit(1);
+        courier = row ? toPublicCourier(row) : null;
       }
-      return data;
+      // El código de confirmación solo se revela al cliente dueño del pedido.
+      const visibleOrder = order.customerId !== ctx.user.id ? { ...order, deliveryConfirmationCode: null } : order;
+      return { ...data, order: visibleOrder, courier };
     }),
 
   cancel: authedQuery

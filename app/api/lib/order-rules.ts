@@ -20,3 +20,24 @@ export function canCourierRelease(acceptedAt: Date | string | null | undefined, 
 export function hasReachedActiveLimit(activeCount: number) {
   return activeCount >= MAX_ACTIVE_DELIVERIES;
 }
+
+/**
+ * Estados desde los que el COMERCIO puede cancelar.
+ *  - Rescate: solo antes de empezar a armar el pack (pendiente / aceptado).
+ *  - Delivery: también en cocina o "listo" (sin repartidor), por si falta un ingrediente o hay un
+ *    problema; una vez que el repartidor lo recoge ya no se puede cancelar.
+ */
+export function businessCancelableFrom(type: string): ("pending" | "accepted" | "preparing" | "ready")[] {
+  return type === "delivery" ? ["pending", "accepted", "preparing", "ready"] : ["pending", "accepted"];
+}
+
+export function canBusinessCancel(type: string, status: string) {
+  return (businessCancelableFrom(type) as string[]).includes(status);
+}
+
+/** Cancelar con el pedido ya en cocina o listo exige explicar el motivo (el cliente lo verá). */
+export function businessCancelNeedsReason(status: string) {
+  return status === "preparing" || status === "ready";
+}
+
+export const MIN_CANCEL_REASON_LENGTH = 5;

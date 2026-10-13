@@ -1,11 +1,15 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { trpc } from "@/providers/trpc";
+import { useNewOrderAlert } from "@/hooks/useNewOrderAlert";
+import { playNewOrderBeep, unlockAudio } from "@/lib/alert-sound";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
-import { money, timeAgo } from "@/lib/format";
+import { money, timeAgo, withinMinutes } from "@/lib/format";
 import { ClaimBox } from "@/components/ClaimBox";
 import {
   BUSINESS_CATEGORIES,
+  BUSINESS_RULES,
   ORDER_STATUS_LABELS,
   type OrderStatusKey,
 } from "@contracts/constants";
@@ -238,10 +242,12 @@ function Panel({
       <DeliveryRulesCard business={business} />
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Pedidos totales" value={String(stats.data?.totalOrders ?? 0)} />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+        <Stat label="Ventas de hoy (sin envío)" value={money(stats.data?.todaySales ?? 0)} />
+        <Stat label="Entregados hoy" value={`${stats.data?.todayDelivered ?? 0} de ${stats.data?.todayOrders ?? 0}`} />
         <Stat label="Activos ahora" value={String(stats.data?.activeOrders ?? 0)} />
-        <Stat label="Ingresos" value={money(stats.data?.revenue ?? 0)} />
+        <Stat label="Ventas totales (sin envío)" value={money(stats.data?.revenue ?? 0)} />
+        <Stat label="Pedidos totales" value={String(stats.data?.totalOrders ?? 0)} />
         <Stat label="Rescates" value={String(stats.data?.rescues ?? 0)} />
         <Stat label="Calificación" value={stats.data?.ratingCount ? `⭐ ${stats.data.rating.toFixed(1)} (${stats.data.ratingCount})` : "Sin calificaciones"} />
       </div>
@@ -367,6 +373,19 @@ function OrdersTab({ businessId }: { businessId: number }) {
     { activeOnly: true },
     { refetchInterval: 10_000 },
   );
+  const pushStatus = trpc.push.status.useQuery(undefined, { retry: false });
+  const [soundOn, setSoundOn] = useState(() => typeof window === "undefined" || localStorage.getItem("rescate-business-sound") !== "off");
+  const toggleSound = () => {
+    const next = !soundOn;
+    setSoundOn(next);
+    try { localStorage.setItem("rescate-business-sound", next ? "on" : "off"); } catch { /* sin almacenamiento: no pasa nada */ }
+    if (next) { unlockAudio(); playNewOrderBeep(); } // el clic habilita el audio y sirve de prueba
+  };
+  const pushOnThisDevice = typeof window !== "undefined" && localStorage.getItem("rescate-push-enabled") === "true";
+  useNewOrderAlert(
+    list.isSuccess ? list.data.filter((x) => x.order.status === "pending").map((x) => x.order.id) : null,
+    soundOn,
+  );
   const update = trpc.business.updateOrderStatus.useMutation({
     onSuccess: () => {
       utils.business.orders.invalidate();
@@ -389,20 +408,41 @@ function OrdersTab({ businessId }: { businessId: number }) {
     ready: "delivered",
   };
 
+  const alertBar = (
+    <div className="space-y-2">
+      <button
+        onClick={toggleSound}
+        className={`flex w-full items-center justify-between rounded-2xl px-4 py-2.5 text-xs font-extrabold ring-1 ring-border ${soundOn ? "bg-brand-soft text-brand-dark" : "bg-card text-muted-foreground"}`}
+      >
+        <span>{soundOn ? "🔔 Sonido de pedidos nuevos: activado" : "🔕 Sonido de pedidos nuevos: desactivado"}</span>
+        <span className="underline">{soundOn ? "Silenciar" : "Activar"}</span>
+      </button>
+      {pushStatus.data?.configured && !pushOnThisDevice && (
+        <Link to="/perfil" className="block rounded-2xl bg-amber-100 px-4 py-2.5 text-xs font-bold text-amber-900">
+          🔕 Este dispositivo no recibe notificaciones. Actívalas en Perfil para enterarte de pedidos aunque la app esté cerrada.
+        </Link>
+      )}
+    </div>
+  );
+
   if ((list.data?.length ?? 0) === 0) {
     return (
-      <div className="rounded-3xl bg-card p-8 text-center ring-1 ring-border">
-        <p className="text-4xl">🌤️</p>
-        <p className="font-display mt-2 font-extrabold">Sin pedidos activos</p>
-        <p className="text-sm text-muted-foreground">
-          Cuando entre un pedido aparecerá aquí al instante
-        </p>
+      <div className="space-y-3">
+        {alertBar}
+        <div className="rounded-3xl bg-card p-8 text-center ring-1 ring-border">
+          <p className="text-4xl">🌤️</p>
+          <p className="font-display mt-2 font-extrabold">Sin pedidos activos</p>
+          <p className="text-sm text-muted-foreground">
+            Cuando entre un pedido aparecerá aquí al instante
+          </p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
+      {alertBar}
       {list.data!.map(({ order, items }) => {
         const meta =
           ORDER_STATUS_LABELS[order.status as OrderStatusKey] ??
@@ -451,6 +491,13 @@ function OrdersTab({ businessId }: { businessId: number }) {
                 📝 {order.notes}
               </p>
             )}
+            {order.type === "delivery" && ["accepted", "preparing"].includes(order.status) && (
+              <p className={`mt-2 rounded-xl px-3 py-1.5 text-xs font-bold ${withinMinutes(order.updatedAt, BUSINESS_RULES.businessProgressReminderMin) ? "bg-secondary text-muted-foreground" : "bg-destructive/10 text-destructive"}`}>
+                ⏱️ En este estado {timeAgo(order.updatedAt)}
+                {!withinMinutes(order.updatedAt, BUSINESS_RULES.businessProgressReminderMin) &&
+                  ` · si no avanza, se cancelará solo a los ${BUSINESS_RULES.businessProgressTimeoutMin} min`}
+              </p>
+            )}
             <div className="mt-3 flex gap-2">
               {next && !(order.type === "delivery" && order.status === "ready") && (
                 <button
@@ -466,12 +513,21 @@ function OrdersTab({ businessId }: { businessId: number }) {
                   Esperando que un repartidor lo tome 🏍️
                 </p>
               )}
-              {["pending", "accepted"].includes(order.status) && (
+              {(["pending", "accepted"].includes(order.status) || (order.type === "delivery" && ["preparing", "ready"].includes(order.status))) && (
                 <button
                   disabled={update.isPending}
                   onClick={() => {
-                    const reason = window.prompt("Motivo de la cancelación (el cliente lo verá):");
+                    const needsReason = ["preparing", "ready"].includes(order.status);
+                    const reason = window.prompt(
+                      needsReason
+                        ? "Motivo de la cancelación (obligatorio, el cliente lo verá):"
+                        : "Motivo de la cancelación (el cliente lo verá):",
+                    );
                     if (reason === null) return; // el comercio se arrepintió: no cancela
+                    if (needsReason && reason.trim().length < 5) {
+                      toast.error("Escribe un motivo de al menos 5 caracteres.");
+                      return;
+                    }
                     update.mutate({ orderId: order.id, status: "cancelled", reason: reason.trim() || undefined });
                   }}
                   className="rounded-xl bg-secondary px-4 py-2.5 text-sm font-extrabold text-destructive"

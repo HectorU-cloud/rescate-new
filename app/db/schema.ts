@@ -207,6 +207,8 @@ export const orders = mysqlTable(
     // Momento en que quedó "listo" (para el tiempo límite de espera de repartidor)
     readyAt: timestamp("readyAt"),
     courierReminderSentAt: timestamp("courierReminderSentAt"),
+    // Recordatorio al comercio cuando un delivery aceptado/en cocina no avanza (se reinicia al cambiar de estado)
+    businessReminderSentAt: timestamp("businessReminderSentAt"),
     courierAcceptedAt: timestamp("courierAcceptedAt"),
     deliveredAt: timestamp("deliveredAt"),
     cancelledBy: mysqlEnum("cancelledBy", ["customer", "business", "admin", "system"]),

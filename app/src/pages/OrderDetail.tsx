@@ -62,7 +62,7 @@ export default function OrderDetail() {
     );
   }
 
-  const { order, items, business } = detail.data;
+  const { order, items, business, courier } = detail.data;
   const isActive = !["delivered", "cancelled"].includes(order.status);
 
   return (
@@ -93,6 +93,30 @@ export default function OrderDetail() {
           </p>
         )}
       </section>
+
+      {/* Quién lleva (o llevó) el pedido */}
+      {courier && order.customerId === user?.id && (
+        <section className="flex items-center gap-3 rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">
+          {courier.photoUrl ? (
+            <img src={courier.photoUrl} alt={`Foto de ${courier.name ?? "tu repartidor"}`} className="h-16 w-16 shrink-0 rounded-2xl object-cover" />
+          ) : (
+            <span className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-secondary text-3xl">🛵</span>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] font-extrabold uppercase tracking-wide text-muted-foreground">
+              {order.status === "delivered" ? "Te entregó" : "Tu repartidor"}
+            </p>
+            <p className="font-display truncate text-lg font-extrabold">{courier.name ?? "Repartidor"}</p>
+            <p className="text-xs font-bold text-muted-foreground">
+              {courier.vehicle ? `🏍️ ${courier.vehicle}` : "🏍️ Vehículo no indicado"}
+              {courier.plate ? ` · Placa ${courier.plate}` : ""}
+            </p>
+            <p className="text-xs font-bold text-muted-foreground">
+              {courier.rating != null ? `⭐ ${courier.rating.toFixed(1)} (${courier.ratingCount})` : "⭐ Aún sin calificaciones"}
+            </p>
+          </div>
+        </section>
+      )}
 
       {/* Código de retiro (rescate) */}
       {order.type === "rescue" && order.pickupCode && !["delivered", "cancelled"].includes(order.status) && (

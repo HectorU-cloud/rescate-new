@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
@@ -8,6 +8,8 @@ import { BUSINESS_RULES } from "@contracts/constants";
 import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUsers } from "./lib/push-notifications";
 import { logOrderEvent } from "./lib/order-events";
+import { MIN_CANCEL_REASON_LENGTH, businessCancelNeedsReason, businessCancelableFrom, canBusinessCancel } from "./lib/order-rules";
+import { startOfDayEcuador } from "./lib/business-rules";
 import {
   businesses,
   orderItems,
@@ -35,8 +37,8 @@ async function requireMyBusiness(userId: number) {
 const BUSINESS_NEXT: Record<string, OrderStatus[]> = {
   pending: ["accepted", "cancelled"],
   accepted: ["preparing", "cancelled"],
-  preparing: ["ready"],
-  ready: ["delivered"], // rescate: entregar al retirar; delivery: lo toma el repartidor
+  preparing: ["ready", "cancelled"], // cancelar en cocina: solo delivery (ver canBusinessCancel)
+  ready: ["delivered", "cancelled"], // rescate: entregar al retirar; delivery: lo toma el repartidor o se cancela
 };
 
 export const businessRouter = createRouter({
@@ -195,14 +197,22 @@ export const businessRouter = createRouter({
         });
       }
       if (next === "cancelled") {
-        // Si era un rescate, devuelve el stock del pack
-        await cancelOrderAndRestock(order.id, ["pending", "accepted"], { by: "business", reason: input.reason });
+        if (!canBusinessCancel(order.type, order.status)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido ya no se puede cancelar desde el local" });
+        }
+        if (businessCancelNeedsReason(order.status) && (input.reason?.length ?? 0) < MIN_CANCEL_REASON_LENGTH) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Indica el motivo de la cancelación (el cliente lo verá)" });
+        }
+        // Si era un rescate, devuelve el stock del pack. La condición de estado es atómica:
+        // si un repartidor lo toma justo ahora, la cancelación falla en vez de pisarlo.
+        await cancelOrderAndRestock(order.id, businessCancelableFrom(order.type), { by: "business", reason: input.reason });
         await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: "cancelled", detail: input.reason });
         await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "cancelled", type: order.type, reason: input.reason });
         return { ok: true };
       }
       const [res] = await db.update(orders).set({
         status: next,
+        businessReminderSentAt: null,
         ...(next === "ready" ? { readyAt: new Date(), courierReminderSentAt: null } : {}),
         ...(next === "delivered" ? { deliveredAt: new Date() } : {}),
       }).where(and(eq(orders.id, order.id), eq(orders.status, order.status))); // evita carreras con cancelaciones
@@ -346,35 +356,42 @@ export const businessRouter = createRouter({
       return { ok: true };
     }),
 
-  // --- Estadísticas del día ---
+  // --- Estadísticas ---
+  // Ventas = lo que cobra el local (subtotal de pedidos ENTREGADOS). El envío no cuenta: es del repartidor.
   stats: authedQuery.query(async ({ ctx }) => {
     const biz = await requireMyBusiness(ctx.user.id);
     const db = getDb();
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const startOfDay = startOfDayEcuador();
     const [row] = await db
       .select({
         count: sql<number>`count(*)`,
-        revenue: sql<number>`coalesce(sum(case when status != 'cancelled' then total else 0 end), 0)`,
-        rescues: sql<number>`coalesce(sum(case when type = 'rescue' and status != 'cancelled' then 1 else 0 end), 0)`,
+        delivered: sql<number>`coalesce(sum(case when ${orders.status} = 'delivered' then 1 else 0 end), 0)`,
+        sales: sql<number>`coalesce(sum(case when ${orders.status} = 'delivered' then ${orders.subtotal} else 0 end), 0)`,
+        rescues: sql<number>`coalesce(sum(case when ${orders.type} = 'rescue' and ${orders.status} != 'cancelled' then 1 else 0 end), 0)`,
+        active: sql<number>`coalesce(sum(case when ${orders.status} in ('pending','accepted','preparing','ready') then 1 else 0 end), 0)`,
       })
       .from(orders)
       .where(eq(orders.businessId, biz.id));
-    const pending = await db
-      .select({ count: sql<number>`count(*)` })
+    const [today] = await db
+      .select({
+        delivered: sql<number>`count(*)`,
+        sales: sql<number>`coalesce(sum(${orders.subtotal}), 0)`,
+      })
       .from(orders)
-      .where(
-        and(
-          eq(orders.businessId, biz.id),
-          inArray(orders.status, ["pending", "accepted", "preparing", "ready"]),
-        ),
-      );
-    void startOfDay;
+      .where(and(eq(orders.businessId, biz.id), eq(orders.status, "delivered"), gte(orders.deliveredAt, startOfDay)));
+    const [created] = await db
+      .select({ count: sql<number>`coalesce(sum(case when ${orders.status} != 'cancelled' then 1 else 0 end), 0)` })
+      .from(orders)
+      .where(and(eq(orders.businessId, biz.id), gte(orders.createdAt, startOfDay)));
     return {
       totalOrders: Number(row?.count ?? 0),
-      revenue: Number(row?.revenue ?? 0),
+      deliveredOrders: Number(row?.delivered ?? 0),
+      revenue: Number(row?.sales ?? 0), // ventas totales (sin envío), solo entregados
       rescues: Number(row?.rescues ?? 0),
-      activeOrders: Number(pending[0]?.count ?? 0),
+      activeOrders: Number(row?.active ?? 0),
+      todayOrders: Number(created?.count ?? 0), // pedidos recibidos hoy (sin cancelados)
+      todayDelivered: Number(today?.delivered ?? 0),
+      todaySales: Number(today?.sales ?? 0),
       rating: biz.rating,
       ratingCount: biz.ratingCount,
     };

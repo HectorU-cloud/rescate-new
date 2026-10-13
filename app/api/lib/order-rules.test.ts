@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ACTIVE_DELIVERIES, canCourierRelease, canCustomerCancel, hasReachedActiveLimit } from "./order-rules";
+import { MAX_ACTIVE_DELIVERIES, MIN_CANCEL_REASON_LENGTH, businessCancelNeedsReason, businessCancelableFrom, canBusinessCancel, canCourierRelease, canCustomerCancel, hasReachedActiveLimit } from "./order-rules";
 
 const NOW = new Date("2026-01-15T15:00:00Z");
 const minutesBefore = (min: number, secs = 0) => new Date(NOW.getTime() - min * 60_000 - secs * 1000);
@@ -41,5 +41,29 @@ describe("hasReachedActiveLimit", () => {
     expect(hasReachedActiveLimit(1)).toBe(false);
     expect(hasReachedActiveLimit(2)).toBe(true);
     expect(hasReachedActiveLimit(3)).toBe(true);
+  });
+});
+
+describe("cancelación por el comercio", () => {
+  it("en delivery puede cancelar hasta que el repartidor lo recoge", () => {
+    for (const s of ["pending", "accepted", "preparing", "ready"]) expect(canBusinessCancel("delivery", s)).toBe(true);
+    for (const s of ["picked_up", "delivered", "cancelled"]) expect(canBusinessCancel("delivery", s)).toBe(false);
+  });
+  it("en rescate solo antes de armar el pack", () => {
+    expect(canBusinessCancel("rescue", "pending")).toBe(true);
+    expect(canBusinessCancel("rescue", "accepted")).toBe(true);
+    expect(canBusinessCancel("rescue", "preparing")).toBe(false);
+    expect(canBusinessCancel("rescue", "ready")).toBe(false);
+  });
+  it("la lista de estados permitidos coincide con la regla", () => {
+    expect(businessCancelableFrom("delivery")).toEqual(["pending", "accepted", "preparing", "ready"]);
+    expect(businessCancelableFrom("rescue")).toEqual(["pending", "accepted"]);
+  });
+  it("exige motivo solo cuando ya está en cocina o listo", () => {
+    expect(businessCancelNeedsReason("preparing")).toBe(true);
+    expect(businessCancelNeedsReason("ready")).toBe(true);
+    expect(businessCancelNeedsReason("pending")).toBe(false);
+    expect(businessCancelNeedsReason("accepted")).toBe(false);
+    expect(MIN_CANCEL_REASON_LENGTH).toBe(5);
   });
 });

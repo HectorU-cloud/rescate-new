@@ -124,4 +124,8 @@ export const BUSINESS_RULES = {
   courierReleaseWindowMin: 5,
   // Estados en los que el cliente todavía puede cancelar
   customerCancelableStatuses: ["pending", "accepted"],
+  // Delivery aceptado o en cocina que el comercio no hace avanzar:
+  // a los 25 min se le recuerda por push y a los 60 min se cancela solo.
+  businessProgressReminderMin: 25,
+  businessProgressTimeoutMin: 60,
 } as const;
