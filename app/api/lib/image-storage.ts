@@ -36,9 +36,10 @@ function getClient() {
 }
 
 export async function createImageUploadUrl(args: {
-  businessId: number;
+  businessId?: number;
   contentType: SupportedImageMime;
-  kind: "product" | "rescue-pack";
+  kind: "product" | "rescue-pack" | "courier-profile";
+  ownerId?: number;
 }) {
   const s3 = getClient();
   if (!s3) {
@@ -49,7 +50,9 @@ export async function createImageUploadUrl(args: {
   }
 
   const extension = MIME_EXTENSIONS[args.contentType];
-  const key = `businesses/${args.businessId}/${args.kind}/${nanoid(24)}.${extension}`;
+  const key = args.kind === "courier-profile"
+    ? `couriers/${args.ownerId ?? args.businessId}/profile/${nanoid(24)}.${extension}`
+    : `businesses/${args.businessId ?? 0}/${args.kind}/${nanoid(24)}.${extension}`;
   const command = new PutObjectCommand({
     Bucket: env.s3Bucket,
     Key: key,

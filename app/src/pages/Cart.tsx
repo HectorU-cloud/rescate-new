@@ -13,6 +13,8 @@ export default function Cart() {
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [phone, setPhone] = useState(user?.phone ?? "");
+  const [deliveryCoords, setDeliveryCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locating, setLocating] = useState(false);
 
   const createOrder = trpc.orders.createDelivery.useMutation({
     onSuccess: (data) => {
@@ -101,6 +103,35 @@ export default function Cart() {
           placeholder="Dirección en Milagro (calle, número, referencia)"
           className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
         />
+        <button
+          type="button"
+          disabled={locating || !navigator.geolocation}
+          onClick={() => {
+            if (!navigator.geolocation) {
+              toast.error("Este navegador no permite obtener tu ubicación");
+              return;
+            }
+            setLocating(true);
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                setDeliveryCoords({ lat: position.coords.latitude, lng: position.coords.longitude });
+                setLocating(false);
+                toast.success("Ubicación guardada para estimar la llegada");
+              },
+              (error) => {
+                setLocating(false);
+                toast.error(error.code === error.PERMISSION_DENIED ? "Permite el acceso a tu ubicación para usar esta opción" : "No pudimos obtener tu ubicación. Intenta de nuevo");
+              },
+              { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
+            );
+          }}
+          className="w-full rounded-xl border border-brand/30 bg-brand-soft px-4 py-3 text-sm font-extrabold text-brand-dark disabled:opacity-50"
+        >
+          {locating ? "Obteniendo ubicación…" : deliveryCoords ? "✓ Ubicación de entrega guardada" : "📍 Usar mi ubicación para estimar la llegada (opcional)"}
+        </button>
+        <p className="text-[11px] text-muted-foreground">
+          La ubicación es opcional y se usa para calcular una ETA aproximada. Verifica que coincida con la dirección escrita.
+        </p>
         <input
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
@@ -148,6 +179,8 @@ export default function Cart() {
               quantity: i.quantity,
             })),
             deliveryAddress: address.trim(),
+            deliveryLat: deliveryCoords?.lat,
+            deliveryLng: deliveryCoords?.lng,
             notes: notes.trim() || undefined,
             customerPhone: phone.trim() || undefined,
           });

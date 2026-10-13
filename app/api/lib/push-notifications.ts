@@ -89,9 +89,7 @@ export async function notifyOrderStatus(args: { customerId: number; orderId: num
     accepted: args.type === "rescue" ? { title: "Pack reservado 🧡", body: `Tu pack ${args.code} quedó reservado para retirar en el local.` } : { title: "Pedido confirmado ✅", body: `El local confirmó tu pedido ${args.code}.` },
     preparing: { title: "¡Están preparando tu pedido! 👨‍🍳", body: `El local ya está preparando el pedido ${args.code}.` },
     ready: { title: args.type === "rescue" ? "Tu pack está listo 🧡" : "Tu pedido está listo 🍽️", body: args.type === "rescue" ? `Tu pack ${args.code} está listo para retirar.` : `El pedido ${args.code} está listo para el repartidor.` },
-    assigned: { title: "¡Ya tienes repartidor! 🛵", body: `Un repartidor aceptó el pedido ${args.code} y va al comercio.` },
-    arrived: { title: "El repartidor llegó al local", body: `El repartidor está en el comercio para recoger tu pedido ${args.code}.` },
-    picked_up: { title: "¡Tu pedido va en camino! 🛵", body: `El repartidor recogió tu pedido ${args.code} y va hacia ti.` },
+    picked_up: { title: "¡Tu pedido va en camino! 🛵", body: `El repartidor recogió tu pedido ${args.code}.` },
     delivered: { title: "Pedido entregado 🎉", body: `El pedido ${args.code} figura como entregado. ¡Gracias por usar Rescate!` },
     cancelled: { title: "Pedido cancelado", body: `El pedido ${args.code} fue cancelado.` },
   };

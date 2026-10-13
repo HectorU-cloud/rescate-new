@@ -14,8 +14,6 @@ export function useAuth(options?: UseAuthOptions) {
 
   const navigate = useNavigate();
 
-  const utils = trpc.useUtils();
-
   const {
     data: user,
     isLoading,
@@ -26,11 +24,15 @@ export function useAuth(options?: UseAuthOptions) {
     retry: false,
   });
 
+  // La navegación completa limpia el estado de React Query del navegador.
+  // El backend debe invalidar la cookie/sesión cuando el endpoint de logout responde.
+  const finishLogout = useCallback(() => {
+    window.location.href = redirectPath;
+  }, [redirectPath]);
+
   const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: async () => {
-      await utils.invalidate();
-      navigate(redirectPath);
-    },
+    onSuccess: finishLogout,
+    onError: finishLogout,
   });
 
   const logout = useCallback(() => logoutMutation.mutate(), [logoutMutation]);

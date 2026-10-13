@@ -30,6 +30,7 @@ function useNavItems(): NavItem[] {
       { to: "/", label: "Explorar", icon: "🧭" },
       { to: "/rescate", label: "Rescate", icon: "🧡" },
       { to: "/perfil", label: "Perfil", icon: "👤" },
+      ...(user?.role === "admin" ? [{ to: "/admin/repartidores", label: "Admin", icon: "🛡️" }] : []),
     ];
   }
   if (role === "courier") {
@@ -38,14 +39,16 @@ function useNavItems(): NavItem[] {
       { to: "/", label: "Explorar", icon: "🧭" },
       { to: "/rescate", label: "Rescate", icon: "🧡" },
       { to: "/perfil", label: "Perfil", icon: "👤" },
+      ...(user?.role === "admin" ? [{ to: "/admin/repartidores", label: "Admin", icon: "🛡️" }] : []),
     ];
   }
-  return [
+  const customerItems: NavItem[] = [
     { to: "/", label: "Inicio", icon: "🏠" },
     { to: "/rescate", label: "Rescate", icon: "🧡" },
     { to: "/pedidos", label: "Pedidos", icon: "🧾" },
     { to: "/perfil", label: "Perfil", icon: "👤" },
   ];
+  return user?.role === "admin" ? [...customerItems, { to: "/admin/repartidores", label: "Admin", icon: "🛡️" }] : customerItems;
 }
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -163,7 +166,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
       {/* Navegación inferior móvil */}
       <nav className="safe-bottom fixed inset-x-0 bottom-0 z-40 border-t border-border/70 bg-background/95 backdrop-blur md:hidden">
-        <div className="mx-auto grid max-w-lg grid-cols-4">
+        <div className={`mx-auto grid max-w-lg ${items.length === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
           {items.map((it) => {
             const active =
               it.to === "/"

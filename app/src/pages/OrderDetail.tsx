@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useParams } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
@@ -16,9 +15,6 @@ export default function OrderDetail() {
     redirectPath: LOGIN_PATH,
   });
   const utils = trpc.useUtils();
-  const [chatText, setChatText] = useState("");
-  const [rating, setRating] = useState(5);
-  const [reviewText, setReviewText] = useState("");
   const detail = trpc.orders.byId.useQuery(
     { id: orderId },
     {
@@ -29,9 +25,6 @@ export default function OrderDetail() {
           : 8_000,
     },
   );
-  const chat = trpc.orders.chatMessages.useQuery({ id: orderId }, { enabled: isAuthenticated && Number.isFinite(orderId), refetchInterval: 4000, retry: false });
-  const sendMessage = trpc.orders.sendChatMessage.useMutation({ onSuccess: () => { setChatText(""); utils.orders.chatMessages.invalidate({ id: orderId }); }, onError: (e) => toast.error(e.message) });
-  const sendReview = trpc.courier.reviewCourier.useMutation({ onSuccess: () => { toast.success("¡Gracias por valorar la entrega!"); utils.orders.invalidate(); }, onError: (e) => toast.error(e.message) });
   const liveLocation = trpc.orders.liveLocation.useQuery(
     { id: orderId },
     {
@@ -113,18 +106,11 @@ export default function OrderDetail() {
         </section>
       )}
 
-      {order.type === "delivery" && detail.data.courier && (
-        <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border space-y-3">
-          <h2 className="font-display text-base font-extrabold">Tu repartidor</h2>
-          <div className="flex items-center gap-3">
-            {detail.data.courier.photoUrl ? <img src={detail.data.courier.photoUrl} alt={`Foto de ${detail.data.courier.name ?? "tu repartidor"}`} className="h-16 w-16 rounded-2xl object-cover" /> : <span className="grid h-16 w-16 place-items-center rounded-2xl bg-secondary text-2xl">🛵</span>}
-            <div className="min-w-0 flex-1">
-              <p className="font-extrabold">{detail.data.courier.name ?? "Repartidor de Rescate"}</p>
-              <p className="text-xs text-muted-foreground">{detail.data.courier.vehicle ?? "Vehículo no especificado"}{detail.data.courier.plate ? ` · ${detail.data.courier.plate}` : ""}</p>
-              <p className="text-xs font-semibold text-brand-dark">{detail.data.courier.verificationStatus === "approved" ? "✓ Identidad revisada por Rescate" : "Perfil en revisión"} · {detail.data.courier.deliveries} entregas · {detail.data.courier.reviewCount ? `${detail.data.courier.rating.toFixed(1)} ★ (${detail.data.courier.reviewCount})` : "Sin valoraciones"}</p>
-            </div>
-          </div>
-          {detail.data.courier.bio && <p className="text-sm text-muted-foreground">{detail.data.courier.bio}</p>}
+      {order.type === "delivery" && order.status === "picked_up" && order.deliveryConfirmationCode && (
+        <section className="rounded-3xl bg-brand-soft p-5 text-center ring-1 ring-brand/20">
+          <p className="text-xs font-extrabold uppercase tracking-wide text-brand-dark">Código para confirmar tu entrega</p>
+          <p className="font-display mt-2 text-4xl font-extrabold tracking-[0.3em] text-brand-dark">{order.deliveryConfirmationCode}</p>
+          <p className="mt-2 text-xs font-semibold text-brand-dark/80">Compártelo con el repartidor únicamente cuando recibas tu pedido. No lo envíes por el chat antes de la entrega.</p>
         </section>
       )}
 
@@ -134,8 +120,27 @@ export default function OrderDetail() {
           Estado del pedido
         </h2>
         <StatusTimeline type={order.type} status={order.status} />
+        {order.type === "delivery" && order.status === "picked_up" && liveLocation.data && !liveLocation.data.stale && (
+          <div className="mt-4 rounded-2xl bg-brand-soft p-4 ring-1 ring-brand/20">
+            <p className="text-sm font-extrabold text-brand-dark">🛵 Seguimiento del repartidor</p>
+            {liveLocation.data.etaMinutes != null ? (
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <div>
+                  <p className="font-display text-2xl font-extrabold text-brand-dark">{liveLocation.data.etaMinutes <= 1 ? "Llegando" : `~${liveLocation.data.etaMinutes} min`}</p>
+                  <p className="text-xs font-semibold text-brand-dark/80">Tiempo estimado de llegada</p>
+                </div>
+                {liveLocation.data.remainingDistanceKm != null && (
+                  <p className="text-xs font-bold text-brand-dark">Aprox. {liveLocation.data.remainingDistanceKm.toFixed(1)} km</p>
+                )}
+              </div>
+            ) : (
+              <p className="mt-2 text-xs font-semibold text-brand-dark/80">GPS recibido. Para estimar la llegada, el cliente debe compartir su ubicación al realizar el pedido.</p>
+            )}
+            <p className="mt-2 text-[11px] text-brand-dark/70">Estimación orientativa basada en distancia geográfica; el tráfico y la ruta real pueden cambiar el tiempo.</p>
+          </div>
+        )}
         {order.type === "delivery" &&
-          ["ready", "assigned", "arrived", "picked_up"].includes(order.status) && (
+          ["ready", "picked_up"].includes(order.status) && (
             <div className="mt-4 overflow-hidden rounded-2xl ring-1 ring-border">
               <iframe
                 title={liveLocation.data && !liveLocation.data.stale ? "Ubicación GPS del repartidor" : "Mapa del local"}
@@ -152,29 +157,6 @@ export default function OrderDetail() {
             </div>
           )}
       </section>
-
-      {order.type === "delivery" && order.courierId && isActive && (
-        <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border space-y-3">
-          <div><h2 className="font-display text-base font-extrabold">Mensajes de entrega</h2><p className="text-xs text-muted-foreground">Comunícate con tu repartidor desde Rescate; evita compartir datos sensibles.</p></div>
-          <div className="max-h-64 space-y-2 overflow-y-auto rounded-2xl bg-secondary/50 p-3">
-            {(chat.data ?? []).length === 0 ? <p className="py-4 text-center text-xs text-muted-foreground">Aún no hay mensajes. Puedes escribirle si necesitas coordinar la entrega.</p> : (chat.data ?? []).map((m) => <div key={m.id} className={`flex ${m.mine ? "justify-end" : "justify-start"}`}><div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.mine ? "bg-brand text-white" : "bg-card ring-1 ring-border"}`}><p>{m.body}</p><p className={`mt-1 text-[10px] ${m.mine ? "text-white/70" : "text-muted-foreground"}`}>{new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p></div></div>)}
-          </div>
-          <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (chatText.trim()) sendMessage.mutate({ id: order.id, body: chatText.trim() }); }}>
-            <input value={chatText} onChange={(e) => setChatText(e.target.value)} maxLength={1000} placeholder="Escribe un mensaje…" className="min-w-0 flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm" />
-            <button disabled={!chatText.trim() || sendMessage.isPending} className="rounded-xl bg-brand px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Enviar</button>
-          </form>
-        </section>
-      )}
-
-      {order.type === "delivery" && order.status === "delivered" && order.courierId && (
-        <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border space-y-3">
-          <h2 className="font-display text-base font-extrabold">¿Cómo fue la entrega?</h2>
-          <p className="text-sm text-muted-foreground">Tu opinión ayuda a que Rescate sea una comunidad más confiable.</p>
-          <div className="flex gap-2" aria-label="Calificación de una a cinco estrellas">{[1,2,3,4,5].map((n) => <button key={n} type="button" onClick={() => setRating(n)} className={`text-2xl ${n <= rating ? "text-amber-500" : "text-muted-foreground"}`} aria-label={`${n} estrellas`}>★</button>)}</div>
-          <textarea value={reviewText} onChange={(e) => setReviewText(e.target.value)} maxLength={500} placeholder="Comentario opcional" className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm" />
-          <button disabled={sendReview.isPending} onClick={() => sendReview.mutate({ orderId: order.id, rating, comment: reviewText || undefined })} className="w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50">Enviar valoración</button>
-        </section>
-      )}
 
       {/* Detalle */}
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">

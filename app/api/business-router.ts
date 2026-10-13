@@ -132,7 +132,11 @@ export const businessRouter = createRouter({
         arr.push(it);
         byOrder.set(it.orderId, arr);
       }
-      return filtered.map((o) => ({ order: o, items: byOrder.get(o.id) ?? [] }));
+      return filtered.map((o) => ({
+        // El código de confirmación es exclusivo del cliente; el comercio no debe verlo.
+        order: { ...o, deliveryConfirmationCode: null },
+        items: byOrder.get(o.id) ?? [],
+      }));
     }),
 
   updateOrderStatus: authedQuery

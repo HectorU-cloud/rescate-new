@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
 import { APP_ROLES, type AppRole } from "@contracts/constants";
 import { toast } from "sonner";
+import { Camera, ShieldCheck } from "lucide-react";
 import { getFirebaseVapidKey, getFirebaseWebConfig, loadPushClient } from "@/lib/push-client";
 
 export default function Profile() {
@@ -14,6 +15,46 @@ export default function Profile() {
   });
   const navigate = useNavigate();
   const [phone, setPhone] = useState(user?.phone ?? "");
+  const courierProfile = trpc.profile.courierProfile.useQuery(undefined, { enabled: isAuthenticated });
+  const [vehicle, setVehicle] = useState("");
+  const [plate, setPlate] = useState("");
+  const [bio, setBio] = useState("");
+  const [photoUrl, setPhotoUrl] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const saveCourierProfile = trpc.profile.updateCourierProfile.useMutation({ onSuccess: () => { void courierProfile.refetch(); toast.success("Perfil de repartidor guardado"); }, onError: (e) => toast.error(e.message) });
+  const createCourierPhotoUpload = trpc.profile.createCourierPhotoUpload.useMutation();
+  useEffect(() => {
+    if (courierProfile.data) {
+      setVehicle(courierProfile.data.courierVehicle ?? "");
+      setPlate(courierProfile.data.courierPlate ?? "");
+      setBio(courierProfile.data.courierBio ?? "");
+      setPhotoUrl(courierProfile.data.courierPhotoUrl ?? "");
+    }
+  }, [courierProfile.data]);
+
+  const uploadCourierPhoto = async (file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/") || !["image/jpeg", "image/png", "image/webp"].includes(file.type)) { toast.error("Usa una imagen JPG, PNG o WebP."); return; }
+    setPhotoBusy(true);
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, 1200 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("No se pudo procesar la fotografía.");
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => b ? resolve(b) : reject(new Error("No se pudo comprimir la imagen.")), "image/webp", 0.82));
+      const signed = await createCourierPhotoUpload.mutateAsync({ contentType: "image/webp" });
+      const response = await fetch(signed.uploadUrl, { method: "PUT", headers: { "Content-Type": "image/webp" }, body: blob });
+      if (!response.ok) throw new Error("Falló la subida a R2. Revisa la configuración CORS del bucket.");
+      setPhotoUrl(signed.imageUrl);
+      toast.success("Foto subida. Pulsa Guardar perfil para confirmar.");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "No se pudo subir la foto."); }
+    finally { setPhotoBusy(false); }
+  };
   const [pushBusy, setPushBusy] = useState(false);
   const pushStatus = trpc.push.status.useQuery(undefined, { enabled: isAuthenticated, retry: false });
   const registerPush = trpc.push.register.useMutation({ onError: (e) => toast.error(e.message) });
@@ -90,11 +131,29 @@ export default function Profile() {
           <h1 className="font-display truncate text-xl font-extrabold">
             {user.name ?? "Usuario"}
           </h1>
-          <p className="truncate text-sm font-semibold text-muted-foreground">
-            {user.email}
-          </p>
+          <p className="truncate text-sm font-semibold text-muted-foreground">{user.email}</p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {user.role === "admin" && <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-extrabold text-emerald-800">🛡️ Administrador</span>}
+            <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-bold text-muted-foreground">Modo: {user.appRole ?? "sin configurar"}</span>
+          </div>
         </div>
       </section>
+
+      {user.appRole === "courier" && (
+        <section className="space-y-4 rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
+          <div className="flex items-center gap-2"><Camera className="h-5 w-5 text-brand" /><h2 className="font-display text-base font-extrabold">Mi perfil de repartidor</h2></div>
+          <div className="flex items-center gap-4">
+            <div className="h-20 w-20 overflow-hidden rounded-full bg-secondary ring-1 ring-border">{photoUrl ? <img src={photoUrl} alt="Foto de perfil del repartidor" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-2xl">🏍️</div>}</div>
+            <label className="cursor-pointer rounded-xl border border-border px-4 py-2 text-sm font-bold hover:bg-secondary">{photoBusy ? "Subiendo…" : "Subir fotografía"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={photoBusy} onChange={(e) => { void uploadCourierPhoto(e.target.files?.[0]); e.currentTarget.value = ""; }} /></label>
+          </div>
+          <p className="text-xs text-muted-foreground">La foto se comprime en el navegador y se sube directamente a R2 mediante una URL temporal.</p>
+          <label className="block text-xs font-bold">Vehículo<input value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="Ej. Motocicleta negra" maxLength={80} className="mt-1 w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-medium" /></label>
+          <label className="block text-xs font-bold">Placa (opcional)<input value={plate} onChange={(e) => setPlate(e.target.value)} placeholder="Ej. GBA-1234" maxLength={20} className="mt-1 w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-medium" /></label>
+          <label className="block text-xs font-bold">Presentación<textarea value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Cuéntales algo breve a tus clientes…" maxLength={300} rows={3} className="mt-1 w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-medium" /></label>
+          <div className="flex items-center gap-2 rounded-xl bg-secondary p-3 text-xs font-semibold"> <ShieldCheck className="h-4 w-4" /> Estado de revisión: {courierProfile.data?.courierApproved ? "Aprobado" : "Pendiente de revisión administrativa"}</div>
+          <button onClick={() => saveCourierProfile.mutate({ photoUrl: photoUrl || undefined, vehicle, plate, bio })} disabled={saveCourierProfile.isPending || photoBusy} className="w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50">{saveCourierProfile.isPending ? "Guardando…" : "Guardar perfil de repartidor"}</button>
+        </section>
+      )}
 
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
         <h2 className="font-display text-base font-extrabold">Tu celular</h2>

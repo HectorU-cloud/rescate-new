@@ -26,7 +26,6 @@
       ]
     },
     "moduleResolution": "bundler",
-    "ignoreDeprecations": "5.0",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",

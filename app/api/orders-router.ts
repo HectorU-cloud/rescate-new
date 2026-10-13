@@ -10,9 +10,6 @@ import { getDb } from "./queries/connection";
 import {
   businesses,
   courierLocations,
-  courierReviews,
-  deliveryMessages,
-  users,
   orderItems,
   orders,
   products,
@@ -63,6 +60,8 @@ export const ordersRouter = createRouter({
           .min(1)
           .max(50),
         deliveryAddress: z.string().min(5).max(300),
+        deliveryLat: z.number().min(-90).max(90).optional(),
+        deliveryLng: z.number().min(-180).max(180).optional(),
         notes: z.string().max(300).optional(),
         customerPhone: z.string().max(30).optional(),
       }),
@@ -108,6 +107,8 @@ export const ordersRouter = createRouter({
             deliveryFee,
             total,
             deliveryAddress: input.deliveryAddress,
+            deliveryLat: input.deliveryLat ?? null,
+            deliveryLng: input.deliveryLng ?? null,
             notes: input.notes ?? null,
             customerName: ctx.user.name ?? "Cliente",
             customerPhone: input.customerPhone ?? ctx.user.phone ?? null,
@@ -219,7 +220,7 @@ export const ordersRouter = createRouter({
     .query(async ({ ctx, input }) => {
       const db = getDb();
       const order = await db.query.orders.findFirst({ where: eq(orders.id, input.id) });
-      if (!order || order.type !== "delivery" || !(["assigned", "arrived", "picked_up"] as string[]).includes(order.status) || !order.courierId) return null;
+      if (!order || order.type !== "delivery" || order.status !== "picked_up" || !order.courierId) return null;
       const ownedBiz = await db.query.businesses.findFirst({
         where: and(eq(businesses.id, order.businessId), eq(businesses.ownerId, ctx.user.id)),
       });
@@ -228,35 +229,25 @@ export const ordersRouter = createRouter({
       const location = await db.query.courierLocations.findFirst({ where: eq(courierLocations.orderId, order.id) });
       if (!location || location.courierId !== order.courierId) return null;
       // No mostrar una posición antigua como si fuera en vivo.
-      if (Date.now() - new Date(location.updatedAt).getTime() > 2 * 60 * 1000) return { ...location, stale: true };
-      return { ...location, stale: false };
-    }),
-
-  chatMessages: authedQuery
-    .input(z.object({ id: z.number().int().positive() }))
-    .query(async ({ ctx, input }) => {
-      const db = getDb();
-      const order = await db.query.orders.findFirst({ where: eq(orders.id, input.id) });
-      if (!order || order.type !== "delivery" || !order.courierId || ![order.customerId, order.courierId].includes(ctx.user.id)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "El chat está disponible para el cliente y el repartidor asignado" });
+      const stale = Date.now() - new Date(location.updatedAt).getTime() > 2 * 60 * 1000;
+      let etaMinutes: number | null = null;
+      let remainingDistanceKm: number | null = null;
+      const hasDestination = order.deliveryLat != null && order.deliveryLng != null;
+      if (!stale && hasDestination) {
+        const toRad = (degrees: number) => (degrees * Math.PI) / 180;
+        const lat1 = toRad(location.lat);
+        const lat2 = toRad(order.deliveryLat!);
+        const dLat = lat2 - lat1;
+        const dLng = toRad(order.deliveryLng! - location.lng);
+        const haversine = Math.sin(dLat / 2) ** 2 +
+          Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+        const earthRadiusKm = 6371;
+        const straightLineKm = 2 * earthRadiusKm * Math.asin(Math.min(1, Math.sqrt(haversine)));
+        // Estimación orientativa: factor de ruta urbana 1.3 y velocidad media 18 km/h.
+        remainingDistanceKm = Math.round(straightLineKm * 1.3 * 10) / 10;
+        etaMinutes = straightLineKm < 0.15 ? 1 : Math.max(1, Math.ceil((remainingDistanceKm / 18) * 60));
       }
-      const messages = await db.select().from(deliveryMessages).where(eq(deliveryMessages.orderId, order.id)).orderBy(deliveryMessages.createdAt);
-      return messages.map((m) => ({ ...m, mine: m.senderId === ctx.user.id }));
-    }),
-
-  sendChatMessage: authedQuery
-    .input(z.object({ id: z.number().int().positive(), body: z.string().trim().min(1).max(1000) }))
-    .mutation(async ({ ctx, input }) => {
-      const db = getDb();
-      const order = await db.query.orders.findFirst({ where: eq(orders.id, input.id) });
-      if (!order || order.type !== "delivery" || !order.courierId || ![order.customerId, order.courierId].includes(ctx.user.id)) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "No tienes acceso a este chat" });
-      }
-      if (["delivered", "cancelled"].includes(order.status)) throw new TRPCError({ code: "BAD_REQUEST", message: "El chat está cerrado porque la entrega finalizó" });
-      const [created] = await db.insert(deliveryMessages).values({ orderId: order.id, senderId: ctx.user.id, body: input.body }).$returningId();
-      const recipientId = ctx.user.id === order.customerId ? order.courierId : order.customerId;
-      await sendPushToUser(recipientId, { title: "Nuevo mensaje de entrega", body: input.body.slice(0, 120), url: `/orders/${order.id}`, orderId: order.id }).catch((error) => console.error("No se pudo enviar aviso de chat:", error));
-      return { ok: true, id: created.id };
+      return { ...location, stale, etaMinutes, remainingDistanceKm, hasDestination };
     }),
 
   byId: authedQuery
@@ -278,14 +269,11 @@ export const ordersRouter = createRouter({
       if (!allowed) {
         throw new TRPCError({ code: "FORBIDDEN", message: "No puedes ver este pedido" });
       }
-      let courier = null;
-      if (order.type === "delivery" && order.courierId && order.customerId === ctx.user.id) {
-        const person = await db.query.users.findFirst({ where: eq(users.id, order.courierId) });
-        const [stats] = await db.select({ rating: sql<number>`coalesce(avg(${courierReviews.rating}), 0)`, reviewCount: sql<number>`count(*)` }).from(courierReviews).where(eq(courierReviews.courierId, order.courierId));
-        const [countRow] = await db.select({ deliveries: sql<number>`count(*)` }).from(orders).where(and(eq(orders.courierId, order.courierId), eq(orders.status, "delivered")));
-        if (person) courier = { id: person.id, name: person.name, photoUrl: person.courierPhotoUrl ?? person.avatar, vehicle: person.courierVehicle, plate: person.courierPlate, bio: person.courierBio, verificationStatus: person.courierVerificationStatus, rating: Number(stats?.rating ?? 0), reviewCount: Number(stats?.reviewCount ?? 0), deliveries: Number(countRow?.deliveries ?? 0) };
+      // El código de confirmación solo se revela al cliente dueño del pedido.
+      if (order.customerId !== ctx.user.id) {
+        return { ...data, order: { ...order, deliveryConfirmationCode: null } };
       }
-      return { ...data, courier };
+      return data;
     }),
 
   cancel: authedQuery
