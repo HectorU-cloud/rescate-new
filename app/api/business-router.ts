@@ -360,7 +360,7 @@ export const businessRouter = createRouter({
   // Reseñas visibles únicamente para el dueño del comercio autenticado.
   reviews: authedQuery.query(async ({ ctx }) => {
     const biz = await requireMyBusiness(ctx.user.id);
-    return getDb()
+    const rows = await getDb()
       .select({
         id: ratings.id,
         orderId: ratings.orderId,
@@ -372,8 +372,10 @@ export const businessRouter = createRouter({
       .from(ratings)
       .leftJoin(users, eq(users.id, ratings.customerId))
       .where(eq(ratings.businessId, biz.id))
-      .orderBy(desc(ratings.createdAt))
+      .orderBy(desc(ratings.createdAt), desc(ratings.id))
       .limit(100);
+    // Al comercio solo se le muestra el primer nombre del cliente (igual que el chat y la tarjeta del repartidor).
+    return rows.map((r) => ({ ...r, customerName: r.customerName?.trim().split(/\s+/)[0] || null }));
   }),
 
   // --- Estadísticas ---

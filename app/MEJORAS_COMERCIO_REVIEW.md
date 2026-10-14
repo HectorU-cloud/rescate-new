@@ -15,3 +15,6 @@
 5. Ejecuta `npm run check`, `npm test` y `npm run build`.
 
 No se necesita migración de base de datos: se usan las tablas y columnas existentes.
+
+## Privacidad
+`business.reviews` devuelve solo el **primer nombre** del cliente (igual que el chat y la tarjeta del repartidor); el apellido no llega al navegador del comercio. Las reseñas empatadas por fecha se ordenan por `id` (la más nueva primero). Está cubierto por pruebas.

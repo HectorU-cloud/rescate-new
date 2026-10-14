@@ -12,7 +12,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq, inArray } from "drizzle-orm";
-import { startOfDayEcuador } from "./lib/business-rules";
+import { bayesianRating, startOfDayEcuador } from "./lib/business-rules";
 
 const TEST_URL = process.env.TEST_DATABASE_URL;
 const dbName = TEST_URL ? new URL(TEST_URL).pathname.replace(/^\//, "") : "";
@@ -47,11 +47,14 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       await db.delete(S.orderItems).where(inArray(S.orderItems.orderId, created.orders));
       await db.delete(S.orderEvents).where(inArray(S.orderEvents.orderId, created.orders));
       await db.delete(S.orderMessages).where(inArray(S.orderMessages.orderId, created.orders));
+      await db.delete(S.ratings).where(inArray(S.ratings.orderId, created.orders));
+      await db.delete(S.claims).where(inArray(S.claims.orderId, created.orders));
       await db.delete(S.courierLocations).where(inArray(S.courierLocations.orderId, created.orders));
       await db.delete(S.orders).where(inArray(S.orders.id, created.orders));
     }
     if (created.packs.length) await db.delete(S.rescuePacks).where(inArray(S.rescuePacks.id, created.packs));
     if (created.businesses.length) await db.delete(S.businesses).where(inArray(S.businesses.id, created.businesses));
+    if (created.users.length) await db.delete(S.customerAddresses).where(inArray(S.customerAddresses.userId, created.users));
     if (created.users.length) await db.delete(S.users).where(inArray(S.users.id, created.users));
   });
 
@@ -66,10 +69,17 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
     return user;
   }
 
-  async function mkBusiness(ownerId: number) {
+  async function mkAdmin() {
+    const user = await mkUser("customer");
+    await db.update(S.users).set({ role: "admin" }).where(eq(S.users.id, user.id));
+    const [admin] = await db.select().from(S.users).where(eq(S.users.id, user.id));
+    return admin;
+  }
+
+  async function mkBusiness(ownerId: number, over: Partial<typeof S.businesses.$inferInsert> = {}) {
     const [{ id }] = await db
       .insert(S.businesses)
-      .values({ ownerId, name: `${tag} local`, category: "test", address: "Calle 1", lat: -2.134, lng: -79.594, approvalStatus: "approved" })
+      .values({ ownerId, name: `${tag} local`, category: "test", address: "Calle 1", lat: -2.134, lng: -79.594, approvalStatus: "approved", ...over })
       .$returningId();
     created.businesses.push(id);
     return id;
@@ -599,6 +609,445 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       const order = await getOrder(orderId);
       expect(order.status).toBe("preparing");
       expect(order.businessReminderSentAt).toBeNull();
+    });
+  });
+
+  // ------------------------------------------------------------------ calificaciones
+  describe("calificaciones", () => {
+    /** Pedido entregado con cliente, comercio y repartidor. */
+    async function setupRating(over: Partial<typeof S.orders.$inferInsert> = {}) {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status: "delivered", courierId: courier.id, deliveredAt: new Date(), ...over });
+      return { customer, owner, biz, courier, orderId };
+    }
+    const ratingsOf = (orderId: number) => db.select().from(S.ratings).where(eq(S.ratings.orderId, orderId));
+    const bizRow = async (id: number) => (await db.select().from(S.businesses).where(eq(S.businesses.id, id)))[0];
+    const userRow = async (id: number) => (await db.select().from(S.users).where(eq(S.users.id, id)))[0];
+
+    it("solo el cliente del pedido puede calificar (no un tercero, ni el comercio, ni el repartidor)", async () => {
+      const { owner, courier, orderId } = await setupRating();
+      const stranger = await mkUser("customer");
+      for (const who of [stranger, owner, courier]) {
+        await expect(callerFor(who).orders.rate({ orderId, businessStars: 5 })).rejects.toThrow(/No puedes calificar este pedido/);
+      }
+      expect(await ratingsOf(orderId)).toHaveLength(0);
+    });
+
+    it("solo se califica un pedido entregado", async () => {
+      for (const status of ["pending", "accepted", "preparing", "ready", "picked_up", "cancelled"] as const) {
+        const { customer, orderId } = await setupRating({ status });
+        await expect(callerFor(customer).orders.rate({ orderId, businessStars: 5 })).rejects.toThrow(/cuando el pedido sea entregado/);
+        expect(await ratingsOf(orderId)).toHaveLength(0);
+      }
+    });
+
+    it("califica al comercio y al repartidor y actualiza ambos promedios", async () => {
+      const { customer, biz, courier, orderId } = await setupRating();
+      await callerFor(customer).orders.rate({ orderId, businessStars: 5, businessComment: "  Muy rico  ", courierStars: 4, courierComment: "Rápido" });
+      const [row] = await ratingsOf(orderId);
+      expect(row.businessComment).toBe("Muy rico"); // se recorta
+      expect(row.courierId).toBe(courier.id);
+      const b = await bizRow(biz);
+      expect(b.ratingCount).toBe(1);
+      expect(b.rating).toBe(bayesianRating(5, 1));
+      const c = await userRow(courier.id);
+      expect(c.courierRatingCount).toBe(1);
+      expect(c.courierRating).toBe(bayesianRating(4, 1));
+    });
+
+    it("si no califica al repartidor, no cuenta para su promedio", async () => {
+      const { customer, courier, orderId } = await setupRating();
+      await callerFor(customer).orders.rate({ orderId, businessStars: 4, courierComment: "ignorado" });
+      const [row] = await ratingsOf(orderId);
+      expect(row.courierId).toBeNull();
+      expect(row.courierStars).toBeNull();
+      expect(row.courierComment).toBeNull();
+      const c = await userRow(courier.id);
+      expect(c.courierRatingCount).toBe(0);
+      expect(c.courierRating).toBeNull();
+    });
+
+    it("no se califica al repartidor en un pedido que no tuvo (rescate), pero sí al comercio", async () => {
+      const { customer, orderId } = await setupRating({ type: "rescue", courierId: null });
+      await expect(callerFor(customer).orders.rate({ orderId, businessStars: 5, courierStars: 5 })).rejects.toThrow(/no tuvo repartidor/);
+      expect(await ratingsOf(orderId)).toHaveLength(0);
+      await callerFor(customer).orders.rate({ orderId, businessStars: 5 });
+      expect(await ratingsOf(orderId)).toHaveLength(1);
+    });
+
+    it("calificar dos veces: la segunda se rechaza y no cambia nada", async () => {
+      const { customer, biz, orderId } = await setupRating();
+      const c = callerFor(customer);
+      await c.orders.rate({ orderId, businessStars: 5 });
+      await expect(c.orders.rate({ orderId, businessStars: 1 })).rejects.toThrow(/Ya calificaste este pedido/);
+      const rows = await ratingsOf(orderId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].businessStars).toBe(5);
+      const b = await bizRow(biz);
+      expect([b.ratingCount, b.rating]).toEqual([1, bayesianRating(5, 1)]);
+    });
+
+    it("dos envíos simultáneos cuentan una sola calificación", async () => {
+      const { customer, biz, orderId } = await setupRating();
+      const c = callerFor(customer);
+      const results = await Promise.allSettled([
+        c.orders.rate({ orderId, businessStars: 5 }),
+        c.orders.rate({ orderId, businessStars: 5 }),
+      ]);
+      expect(fulfilled(results)).toBe(1);
+      expect(await ratingsOf(orderId)).toHaveLength(1);
+      expect((await bizRow(biz)).ratingCount).toBe(1);
+    });
+
+    it("rechaza estrellas fuera de 1–5 y comentarios de más de 300 caracteres", async () => {
+      const { customer, orderId } = await setupRating();
+      const c = callerFor(customer);
+      for (const businessStars of [0, 6, 3.5]) await expect(c.orders.rate({ orderId, businessStars })).rejects.toThrow();
+      await expect(c.orders.rate({ orderId, businessStars: 5, businessComment: "x".repeat(301) })).rejects.toThrow();
+      expect(await ratingsOf(orderId)).toHaveLength(0);
+    });
+
+    it("el promedio del comercio se recalcula con varias calificaciones", async () => {
+      const { customer, biz, orderId } = await setupRating();
+      const second = await mkUser("customer");
+      const orderId2 = await mkOrder({ customerId: second.id, businessId: biz, status: "delivered", deliveredAt: new Date() });
+      await callerFor(customer).orders.rate({ orderId, businessStars: 5 });
+      await callerFor(second).orders.rate({ orderId: orderId2, businessStars: 1 });
+      const b = await bizRow(biz);
+      expect(b.ratingCount).toBe(2);
+      expect(b.rating).toBe(bayesianRating(6, 2));
+    });
+
+    it("myRating devuelve solo la calificación propia", async () => {
+      const { customer, owner, orderId } = await setupRating();
+      await callerFor(customer).orders.rate({ orderId, businessStars: 4 });
+      expect((await callerFor(customer).orders.myRating({ orderId }))?.businessStars).toBe(4);
+      expect(await callerFor(owner).orders.myRating({ orderId })).toBeNull();
+      expect(await callerFor(await mkUser("customer")).orders.myRating({ orderId })).toBeNull();
+    });
+  });
+
+  // ------------------------------------------------------------------ reseñas del comercio
+  describe("reseñas del comercio (business.reviews)", () => {
+    it("el dueño ve solo las reseñas de su local, de la más nueva a la más antigua y solo con el primer nombre", async () => {
+      const ownerA = await mkUser("business");
+      const bizA = await mkBusiness(ownerA.id);
+      const ownerB = await mkUser("business");
+      const bizB = await mkBusiness(ownerB.id);
+      const customer = await mkUser("customer");
+      await db.update(S.users).set({ name: "María Fernanda López" }).where(eq(S.users.id, customer.id));
+      const [fresh] = await db.select().from(S.users).where(eq(S.users.id, customer.id));
+      const c = callerFor(fresh);
+      const delivered = (businessId: number) => mkOrder({ customerId: customer.id, businessId, status: "delivered", deliveredAt: new Date() });
+      const o1 = await delivered(bizA);
+      const o2 = await delivered(bizA);
+      const o3 = await delivered(bizB);
+      await c.orders.rate({ orderId: o1, businessStars: 5, businessComment: "Excelente" });
+      await c.orders.rate({ orderId: o2, businessStars: 3 });
+      await c.orders.rate({ orderId: o3, businessStars: 1, businessComment: "Del otro local" });
+
+      const a = await callerFor(ownerA).business.reviews();
+      expect(a.map((r) => r.businessStars)).toEqual([3, 5]); // la más nueva primero
+      expect(a[1].businessComment).toBe("Excelente");
+      expect(a[0].businessComment).toBeNull();
+      expect(a.every((r) => r.customerName === "María")).toBe(true);
+      expect(JSON.stringify(a)).not.toContain("López");
+      expect(JSON.stringify(a)).not.toContain("Del otro local");
+
+      const b = await callerFor(ownerB).business.reviews();
+      expect(b).toHaveLength(1);
+      expect(b[0].businessStars).toBe(1);
+    });
+
+    it("quien no tiene un comercio no puede consultar reseñas", async () => {
+      await expect(callerFor(await mkUser("customer")).business.reviews()).rejects.toThrow(/Primero registra tu negocio/);
+    });
+
+    it("un comercio sin calificaciones devuelve una lista vacía", async () => {
+      const owner = await mkUser("business");
+      await mkBusiness(owner.id);
+      expect(await callerFor(owner).business.reviews()).toEqual([]);
+    });
+  });
+
+  // ------------------------------------------------------------------ reclamos por rol
+  describe("reclamos por rol", () => {
+    const REASON = "El pedido llegó incompleto y frío";
+    async function setupClaim(over: Partial<typeof S.orders.$inferInsert> = {}) {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status: "delivered", courierId: courier.id, deliveredAt: new Date(), ...over });
+      return { customer, owner, biz, courier, orderId };
+    }
+    const claimsOf = (orderId: number) => db.select().from(S.claims).where(eq(S.claims.orderId, orderId));
+    const eventsOf = (orderId: number) => db.select().from(S.orderEvents).where(eq(S.orderEvents.orderId, orderId));
+
+    it("cada participante reclama con su propio rol: cliente, comercio y repartidor", async () => {
+      const { customer, owner, courier, orderId } = await setupClaim();
+      await callerFor(customer).orders.createClaim({ orderId, reason: REASON });
+      await callerFor(owner).orders.createClaim({ orderId, reason: REASON });
+      await callerFor(courier).orders.createClaim({ orderId, reason: REASON });
+      const rows = await claimsOf(orderId);
+      expect(rows.map((r) => r.reporterRole).sort()).toEqual(["business", "courier", "customer"]);
+      expect(rows.find((r) => r.reporterRole === "customer")!.userId).toBe(customer.id);
+      expect(rows.find((r) => r.reporterRole === "business")!.userId).toBe(owner.id);
+      expect(rows.find((r) => r.reporterRole === "courier")!.userId).toBe(courier.id);
+      expect(rows.every((r) => r.status === "open")).toBe(true);
+    });
+
+    it("un tercero, otro comercio o el repartidor que ya no lo lleva no pueden reclamar", async () => {
+      const { orderId } = await setupClaim();
+      const stranger = await mkUser("customer");
+      const otherOwner = await mkUser("business");
+      await mkBusiness(otherOwner.id);
+      const otherCourier = await mkUser("courier");
+      for (const who of [stranger, otherOwner, otherCourier]) {
+        await expect(callerFor(who).orders.createClaim({ orderId, reason: REASON })).rejects.toThrow(/No puedes reclamar este pedido/);
+      }
+      // y el repartidor que soltó el pedido (ya no está asignado)
+      const released = await setupClaim({ courierId: null });
+      await expect(callerFor(released.courier).orders.createClaim({ orderId: released.orderId, reason: REASON })).rejects.toThrow(/No puedes reclamar este pedido/);
+      expect(await claimsOf(orderId)).toHaveLength(0);
+      expect(await claimsOf(released.orderId)).toHaveLength(0);
+    });
+
+    it("comercio y repartidor no reclaman un pedido aún pendiente; el cliente sí", async () => {
+      const { customer, owner, orderId } = await setupClaim({ status: "pending", courierId: null });
+      await expect(callerFor(owner).orders.createClaim({ orderId, reason: REASON })).rejects.toThrow(/aún no fue aceptado/);
+      const withCourier = await setupClaim({ status: "pending" });
+      await expect(callerFor(withCourier.courier).orders.createClaim({ orderId: withCourier.orderId, reason: REASON })).rejects.toThrow(/aún no fue aceptado/);
+      await callerFor(customer).orders.createClaim({ orderId, reason: REASON });
+      expect(await claimsOf(orderId)).toHaveLength(1);
+    });
+
+    it("exige un motivo de al menos 10 caracteres y no más de 500", async () => {
+      const { customer, orderId } = await setupClaim();
+      await expect(callerFor(customer).orders.createClaim({ orderId, reason: "corto" })).rejects.toThrow(/mínimo 10/);
+      await expect(callerFor(customer).orders.createClaim({ orderId, reason: "x".repeat(501) })).rejects.toThrow();
+      expect(await claimsOf(orderId)).toHaveLength(0);
+    });
+
+    it("no permite dos reclamos abiertos del mismo rol en el mismo pedido, pero sí de otro rol", async () => {
+      const { customer, owner, orderId } = await setupClaim();
+      await callerFor(customer).orders.createClaim({ orderId, reason: REASON });
+      await expect(callerFor(customer).orders.createClaim({ orderId, reason: "Otro motivo distinto aquí" })).rejects.toThrow(/Ya tienes un reclamo abierto/);
+      await callerFor(owner).orders.createClaim({ orderId, reason: REASON });
+      expect(await claimsOf(orderId)).toHaveLength(2);
+    });
+
+    it("quien tiene dos roles usa el primero salvo que elija otro, y no puede elegir uno que no tiene", async () => {
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const orderId = await mkOrder({ customerId: owner.id, businessId: biz, status: "delivered", deliveredAt: new Date() }); // el dueño también es el cliente
+      const c = callerFor(owner);
+      await c.orders.createClaim({ orderId, reason: REASON }); // sin role → customer
+      await c.orders.createClaim({ orderId, reason: REASON, role: "business" });
+      await expect(c.orders.createClaim({ orderId, reason: REASON, role: "courier" })).rejects.toThrow(/No puedes reclamar este pedido/);
+      expect((await claimsOf(orderId)).map((r) => r.reporterRole).sort()).toEqual(["business", "customer"]);
+    });
+
+    it("el reclamo queda en el historial del pedido", async () => {
+      const { courier, orderId } = await setupClaim();
+      await callerFor(courier).orders.createClaim({ orderId, reason: REASON });
+      const ev = (await eventsOf(orderId)).find((e) => e.type === "claim_opened");
+      expect(ev?.actorRole).toBe("courier");
+      expect(ev?.actorId).toBe(courier.id);
+    });
+
+    it("myClaims muestra a cada persona solo sus propios reclamos", async () => {
+      const { customer, owner, orderId } = await setupClaim();
+      await callerFor(customer).orders.createClaim({ orderId, reason: REASON });
+      await callerFor(owner).orders.createClaim({ orderId, reason: "El cliente no estaba en casa" });
+      const mine = await callerFor(customer).orders.myClaims({ orderId });
+      expect(mine).toHaveLength(1);
+      expect(mine[0].reporterRole).toBe("customer");
+      expect(await callerFor(await mkUser("customer")).orders.myClaims({ orderId })).toEqual([]);
+    });
+
+    describe("atención del administrador", () => {
+      async function openClaim() {
+        const ctx = await setupClaim();
+        await callerFor(ctx.customer).orders.createClaim({ orderId: ctx.orderId, reason: REASON });
+        const [claim] = await claimsOf(ctx.orderId);
+        return { ...ctx, claim };
+      }
+
+      it("solo un admin puede ver y resolver reclamos", async () => {
+        const { customer, owner, courier, claim } = await openClaim();
+        for (const who of [customer, owner, courier]) {
+          await expect(callerFor(who).admin.claims()).rejects.toThrow();
+          await expect(callerFor(who).admin.resolveClaim({ id: claim.id, decision: "resolved", resolution: "Intento sin permiso" })).rejects.toThrow();
+        }
+        expect((await claimsOf(claim.orderId))[0].status).toBe("open");
+      });
+
+      it("el admin lista los reclamos y los filtra por estado", async () => {
+        const { orderId, claim } = await openClaim();
+        const admin = await mkAdmin();
+        const open = await callerFor(admin).admin.claims({ status: "open" });
+        expect(open.some((c) => c.id === claim.id && c.orderId === orderId && c.reporterRole === "customer")).toBe(true);
+        const resolved = await callerFor(admin).admin.claims({ status: "resolved" });
+        expect(resolved.some((c) => c.id === claim.id)).toBe(false);
+      });
+
+      it("resolver deja constancia, avisa en el historial y no se puede resolver dos veces", async () => {
+        const { customer, orderId, claim } = await openClaim();
+        const admin = await mkAdmin();
+        await callerFor(admin).admin.resolveClaim({ id: claim.id, decision: "resolved", resolution: "Te reembolsamos el pedido" });
+        const [row] = await claimsOf(orderId);
+        expect(row.status).toBe("resolved");
+        expect(row.resolution).toBe("Te reembolsamos el pedido");
+        expect(row.resolvedBy).toBe(admin.id);
+        expect(row.resolvedAt).not.toBeNull();
+        expect((await eventsOf(orderId)).some((e) => e.type === "claim_resolved" && e.actorRole === "admin")).toBe(true);
+        expect((await callerFor(customer).orders.myClaims({ orderId }))[0].status).toBe("resolved");
+        await expect(callerFor(admin).admin.resolveClaim({ id: claim.id, decision: "rejected", resolution: "Segundo intento" })).rejects.toThrow(/ya fue atendido/);
+        expect((await claimsOf(orderId))[0].status).toBe("resolved");
+      });
+
+      it("dos admins resolviendo a la vez: gana uno solo", async () => {
+        const { claim } = await openClaim();
+        const [a1, a2] = [await mkAdmin(), await mkAdmin()];
+        const results = await Promise.allSettled([
+          callerFor(a1).admin.resolveClaim({ id: claim.id, decision: "resolved", resolution: "Respuesta del admin 1" }),
+          callerFor(a2).admin.resolveClaim({ id: claim.id, decision: "rejected", resolution: "Respuesta del admin 2" }),
+        ]);
+        expect(fulfilled(results)).toBe(1);
+      });
+
+      it("rechazar exige una respuesta y queda registrado como rechazo", async () => {
+        const { orderId, claim } = await openClaim();
+        const admin = await mkAdmin();
+        await expect(callerFor(admin).admin.resolveClaim({ id: claim.id, decision: "rejected", resolution: "no" })).rejects.toThrow(/Escribe una respuesta/);
+        expect((await claimsOf(orderId))[0].status).toBe("open");
+        await callerFor(admin).admin.resolveClaim({ id: claim.id, decision: "rejected", resolution: "El pedido sí fue entregado completo" });
+        expect((await claimsOf(orderId))[0].status).toBe("rejected");
+        expect((await eventsOf(orderId)).some((e) => e.type === "claim_rejected")).toBe(true);
+      });
+
+      it("tras resolverse se puede abrir un reclamo nuevo del mismo rol", async () => {
+        const { customer, orderId, claim } = await openClaim();
+        await callerFor(await mkAdmin()).admin.resolveClaim({ id: claim.id, decision: "resolved", resolution: "Caso cerrado, gracias" });
+        await callerFor(customer).orders.createClaim({ orderId, reason: "Sigue el mismo problema con el pedido" });
+        expect(await claimsOf(orderId)).toHaveLength(2);
+      });
+
+      it("un reclamo inexistente responde 'no encontrado'", async () => {
+        await expect(callerFor(await mkAdmin()).admin.resolveClaim({ id: 999_999_999, decision: "resolved", resolution: "No existe este reclamo" })).rejects.toThrow(/Reclamo no encontrado/);
+      });
+    });
+  });
+
+  // ------------------------------------------------------------------ direcciones guardadas
+  describe("direcciones guardadas", () => {
+    const addr = (over: Partial<{ label: string; address: string; lat: number; lng: number; isDefault: boolean }> = {}) => ({
+      label: "Casa", address: "Calle Bolívar 123 y Sucre", lat: -2.134, lng: -79.594, isDefault: false, ...over,
+    });
+    const countOf = async (userId: number) => (await db.select().from(S.customerAddresses).where(eq(S.customerAddresses.userId, userId)));
+
+    it("guarda y lista solo las propias; la primera queda como principal", async () => {
+      const me = await mkUser("customer");
+      const other = await mkUser("customer");
+      await callerFor(me).profile.saveAddress(addr({ label: "Casa" }));
+      await callerFor(me).profile.saveAddress(addr({ label: "Trabajo", address: "Av. 17 de Septiembre 45" }));
+      const mine = await callerFor(me).profile.myAddresses();
+      expect(mine).toHaveLength(2);
+      expect(mine.filter((a) => a.isDefault).map((a) => a.label)).toEqual(["Casa"]);
+      expect(await callerFor(other).profile.myAddresses()).toEqual([]);
+    });
+
+    it("la principal sale primero y nunca hay más de una", async () => {
+      const me = await mkUser("customer");
+      const c = callerFor(me);
+      await c.profile.saveAddress(addr({ label: "A" }));
+      await c.profile.saveAddress(addr({ label: "B" }));
+      await c.profile.saveAddress(addr({ label: "C", isDefault: true }));
+      const list = await c.profile.myAddresses();
+      expect(list[0].label).toBe("C");
+      expect(list.filter((a) => a.isDefault)).toHaveLength(1);
+    });
+
+    it("el límite es de 10 direcciones por cliente", async () => {
+      const me = await mkUser("customer");
+      const c = callerFor(me);
+      for (let i = 0; i < 10; i++) await c.profile.saveAddress(addr({ label: `Dir ${i}` }));
+      await expect(c.profile.saveAddress(addr({ label: "Dir 11" }))).rejects.toThrow(/hasta 10/);
+      expect(await countOf(me.id)).toHaveLength(10);
+      // el límite es por persona: otro cliente puede guardar las suyas
+      await callerFor(await mkUser("customer")).profile.saveAddress(addr());
+    });
+
+    it("guardados simultáneos no superan el límite ni dejan dos principales", async () => {
+      const me = await mkUser("customer");
+      const c = callerFor(me);
+      for (let i = 0; i < 8; i++) await c.profile.saveAddress(addr({ label: `Dir ${i}` }));
+      const results = await Promise.allSettled([1, 2, 3, 4].map((i) => c.profile.saveAddress(addr({ label: `Nueva ${i}`, isDefault: true }))));
+      expect(fulfilled(results)).toBe(2); // solo caben 2 más
+      const rows = await countOf(me.id);
+      expect(rows).toHaveLength(10);
+      expect(rows.filter((a) => a.isDefault)).toHaveLength(1);
+    });
+
+    it("nadie puede borrar la dirección de otra persona", async () => {
+      const me = await mkUser("customer");
+      const intruder = await mkUser("customer");
+      await callerFor(me).profile.saveAddress(addr());
+      const [saved] = await callerFor(me).profile.myAddresses();
+      await callerFor(intruder).profile.deleteAddress({ id: saved.id });
+      expect(await countOf(me.id)).toHaveLength(1);
+      await callerFor(me).profile.deleteAddress({ id: saved.id });
+      expect(await countOf(me.id)).toHaveLength(0);
+    });
+
+    it("al borrar la principal, la más reciente de las que quedan pasa a ser principal", async () => {
+      const me = await mkUser("customer");
+      const c = callerFor(me);
+      await c.profile.saveAddress(addr({ label: "Casa" })); // principal
+      await c.profile.saveAddress(addr({ label: "Trabajo" }));
+      await c.profile.saveAddress(addr({ label: "Gimnasio" }));
+      const principal = (await c.profile.myAddresses()).find((a) => a.isDefault)!;
+      await c.profile.deleteAddress({ id: principal.id });
+      const list = await c.profile.myAddresses();
+      expect(list).toHaveLength(2);
+      expect(list[0].label).toBe("Gimnasio");
+      expect(list.filter((a) => a.isDefault).map((a) => a.label)).toEqual(["Gimnasio"]);
+    });
+
+    it("rechaza etiquetas vacías, direcciones cortas y coordenadas imposibles", async () => {
+      const me = await mkUser("customer");
+      const c = callerFor(me);
+      for (const bad of [{ label: "  " }, { address: "abc" }, { lat: 91 }, { lat: -91 }, { lng: 181 }, { lng: -181 }]) {
+        await expect(c.profile.saveAddress(addr(bad))).rejects.toThrow();
+      }
+      expect(await countOf(me.id)).toHaveLength(0);
+    });
+  });
+
+  // ------------------------------------------------------------------ catálogo
+  describe("catálogo: locales abiertos primero", () => {
+    it("un local abierto va antes que uno cerrado aunque este tenga más estrellas; dentro de cada grupo, por calificación", async () => {
+      const mk = async (name: string, over: Partial<typeof S.businesses.$inferInsert>) => {
+        const owner = await mkUser("business");
+        return mkBusiness(owner.id, { name: `${tag}-cat ${name}`, opensAt: "00:00", closesAt: "00:00", ...over }); // 00:00–00:00 = 24 h
+      };
+      await mk("cerrado-49", { isOpen: false, rating: 4.9 });
+      await mk("abierto-30", { isOpen: true, rating: 3.0 });
+      await mk("abierto-40", { isOpen: true, rating: 4.0 });
+      await mk("cerrado-20", { isOpen: false, rating: 2.0 });
+      const list = await callerFor(await mkUser("customer")).catalog.businesses({ query: `${tag}-cat` });
+      expect(list.map((b) => b.name.replace(`${tag}-cat `, ""))).toEqual(["abierto-40", "abierto-30", "cerrado-49", "cerrado-20"]);
+      expect(list.map((b) => b.openNow)).toEqual([true, true, false, false]);
+    });
+
+    it("no muestra locales sin aprobar", async () => {
+      const owner = await mkUser("business");
+      await mkBusiness(owner.id, { name: `${tag}-pend local`, approvalStatus: "pending", opensAt: "00:00", closesAt: "00:00" });
+      expect(await callerFor(await mkUser("customer")).catalog.businesses({ query: `${tag}-pend` })).toEqual([]);
     });
   });
 });

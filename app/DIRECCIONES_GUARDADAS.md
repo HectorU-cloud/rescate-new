@@ -21,3 +21,9 @@
 5. Selecciónala y comprueba que se rellenan la dirección y las coordenadas; confirma que la cotización de envío se recalcula.
 6. Elimina la dirección y comprueba que desaparece.
 7. Inicia sesión con otro cliente y confirma que no puede ver ni eliminar la dirección anterior.
+
+## Garantías (cubiertas por pruebas en `api/flows.integration.test.ts`)
+- Guardar es atómico: se bloquea la fila del usuario dentro de una transacción, así que guardados simultáneos no superan las 10 direcciones ni dejan dos principales.
+- La lista sale con la principal primero y luego las más recientes.
+- Al borrar la principal, la más reciente de las que quedan pasa a ser la principal.
+- Borrar una dirección ajena no hace nada (ni borra ni avisa si existe).
