@@ -15,6 +15,7 @@ import {
   orderItems,
   orders,
   products,
+  ratings,
   rescuePacks,
   users,
   type OrderStatus,
@@ -355,6 +356,25 @@ export const businessRouter = createRouter({
         );
       return { ok: true };
     }),
+
+  // Reseñas visibles únicamente para el dueño del comercio autenticado.
+  reviews: authedQuery.query(async ({ ctx }) => {
+    const biz = await requireMyBusiness(ctx.user.id);
+    return getDb()
+      .select({
+        id: ratings.id,
+        orderId: ratings.orderId,
+        businessStars: ratings.businessStars,
+        businessComment: ratings.businessComment,
+        createdAt: ratings.createdAt,
+        customerName: users.name,
+      })
+      .from(ratings)
+      .leftJoin(users, eq(users.id, ratings.customerId))
+      .where(eq(ratings.businessId, biz.id))
+      .orderBy(desc(ratings.createdAt))
+      .limit(100);
+  }),
 
   // --- Estadísticas ---
   // Ventas = lo que cobra el local (subtotal de pedidos ENTREGADOS). El envío no cuenta: es del repartidor.

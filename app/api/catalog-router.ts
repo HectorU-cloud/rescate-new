@@ -36,7 +36,10 @@ export const catalogRouter = createRouter({
             (b.description ?? "").toLowerCase().includes(q),
         );
       }
-      return out.map(withOpenNow);
+      return out
+        .map(withOpenNow)
+        // Prioriza locales abiertos; dentro de cada grupo mantiene el rating descendente.
+        .sort((a, b) => Number(b.openNow) - Number(a.openNow) || b.rating - a.rating);
     }),
 
   businessDetail: publicQuery

@@ -175,7 +175,7 @@ function BusinessSetup() {
 // ---------------------------------------------------------------------------
 // Panel con pestañas
 // ---------------------------------------------------------------------------
-type Tab = "pedidos" | "menu" | "rescate";
+type Tab = "pedidos" | "menu" | "rescate" | "resenas";
 
 function Panel({
   businessId,
@@ -253,12 +253,13 @@ function Panel({
       </div>
 
       {/* Tabs */}
-      <div className="grid grid-cols-3 gap-1 rounded-2xl bg-secondary p-1">
+      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-secondary p-1 sm:grid-cols-4">
         {(
           [
             ["pedidos", "🧾 Pedidos"],
             ["menu", "🍽️ Menú"],
             ["rescate", "🧡 Rescate"],
+            ["resenas", "⭐ Reseñas"],
           ] as [Tab, string][]
         ).map(([t, label]) => (
           <button
@@ -276,8 +277,24 @@ function Panel({
       {tab === "pedidos" && <OrdersTab businessId={businessId} />}
       {tab === "menu" && <MenuTab />}
       {tab === "rescate" && <RescueTab />}
+      {tab === "resenas" && <ReviewsTab />}
     </div>
   );
+}
+
+function ReviewsTab() {
+  const reviews = trpc.business.reviews.useQuery(undefined, { refetchInterval: 60_000 });
+  if (reviews.isLoading) return <div className="h-32 animate-pulse rounded-2xl bg-muted" />;
+  if (reviews.isError) return <p className="rounded-2xl bg-destructive/10 p-4 text-sm">No se pudieron cargar las reseñas. Intenta nuevamente.</p>;
+  if (!reviews.data?.length) return <div className="rounded-2xl border border-dashed p-8 text-center"><p className="text-3xl">⭐</p><h2 className="mt-2 font-extrabold">Todavía no tienes reseñas</h2><p className="mt-1 text-sm text-muted-foreground">Los comentarios aparecerán aquí cuando tus clientes califiquen pedidos.</p></div>;
+  return <div className="space-y-3">
+    <div><h2 className="font-display text-lg font-extrabold">Opiniones de tus clientes</h2><p className="text-sm text-muted-foreground">Últimas {reviews.data.length} reseñas (máximo 100).</p></div>
+    {reviews.data.map((review) => <article key={review.id} className="rounded-2xl border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-bold">{review.customerName || "Cliente"}</p><span aria-label={`${review.businessStars} de 5 estrellas`} className="font-extrabold">{"⭐".repeat(review.businessStars)}<span className="ml-1 text-xs text-muted-foreground">{review.businessStars}/5</span></span></div>
+      <p className="mt-2 text-sm">{review.businessComment?.trim() || "El cliente no dejó un comentario escrito."}</p>
+      <p className="mt-2 text-xs text-muted-foreground">{new Date(review.createdAt).toLocaleDateString("es-EC", { year: "numeric", month: "short", day: "numeric" })}</p>
+    </article>)}
+  </div>;
 }
 
 function DeliveryRulesCard({
