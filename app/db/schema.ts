@@ -47,6 +47,25 @@ export const users = mysqlTable("users", {
   lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
 });
 
+
+// Direcciones guardadas por cada cliente para agilizar futuras compras.
+export const customerAddresses = mysqlTable(
+  "customer_addresses",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    label: varchar("label", { length: 60 }).notNull().default("Casa"),
+    address: varchar("address", { length: 300 }).notNull(),
+    lat: double("lat").notNull(),
+    lng: double("lng").notNull(),
+    isDefault: boolean("isDefault").default(false).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ userIdx: index("customer_address_user_idx").on(t.userId) }),
+);
+
+export type CustomerAddress = typeof customerAddresses.$inferSelect;
+
 export const authTokens = mysqlTable("auth_tokens", {
   id: serial("id").primaryKey(),
   userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),

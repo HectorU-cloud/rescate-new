@@ -4,10 +4,33 @@ import { and, eq, isNotNull } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
 import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
 import { getDb } from "./queries/connection";
-import { users } from "@db/schema";
+import { customerAddresses, users } from "@db/schema";
 import { sendPushToUser } from "./lib/push-notifications";
 
 export const profileRouter = createRouter({
+  // Las direcciones son privadas y siempre se consultan por el usuario autenticado.
+  myAddresses: authedQuery.query(async ({ ctx }) =>
+    getDb().select().from(customerAddresses).where(eq(customerAddresses.userId, ctx.user.id)),
+  ),
+  saveAddress: authedQuery
+    .input(z.object({ label: z.string().trim().min(1).max(60), address: z.string().trim().min(5).max(300), lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180), isDefault: z.boolean().default(false) }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const existing = await db.select({ id: customerAddresses.id }).from(customerAddresses).where(eq(customerAddresses.userId, ctx.user.id));
+      if (existing.length >= 10) throw new TRPCError({ code: "BAD_REQUEST", message: "Puedes guardar hasta 10 direcciones." });
+      const makeDefault = input.isDefault || existing.length === 0;
+      if (makeDefault) await db.update(customerAddresses).set({ isDefault: false }).where(eq(customerAddresses.userId, ctx.user.id));
+      await db.insert(customerAddresses).values({ userId: ctx.user.id, label: input.label, address: input.address, lat: input.lat, lng: input.lng, isDefault: makeDefault });
+      return { ok: true };
+    }),
+  deleteAddress: authedQuery
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      await db.delete(customerAddresses).where(and(eq(customerAddresses.id, input.id), eq(customerAddresses.userId, ctx.user.id)));
+      return { ok: true };
+    }),
+
   courierProfile: authedQuery.query(async ({ ctx }) => {
     const [user] = await getDb().select({
       id: users.id, name: users.name, email: users.email, avatar: users.avatar,

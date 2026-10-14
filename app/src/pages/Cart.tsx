@@ -15,6 +15,17 @@ export default function Cart() {
   const [phone, setPhone] = useState(user?.phone ?? "");
   const [deliveryCoords, setDeliveryCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locating, setLocating] = useState(false);
+  const [addressLabel, setAddressLabel] = useState("Casa");
+  const utils = trpc.useUtils();
+  const savedAddresses = trpc.profile.myAddresses.useQuery(undefined, { enabled: isAuthenticated });
+  const saveAddress = trpc.profile.saveAddress.useMutation({
+    onSuccess: async () => { await utils.profile.myAddresses.invalidate(); toast.success("Dirección guardada para próximas compras"); },
+    onError: (e) => toast.error(e.message),
+  });
+  const deleteAddress = trpc.profile.deleteAddress.useMutation({
+    onSuccess: async () => { await utils.profile.myAddresses.invalidate(); toast.success("Dirección eliminada"); },
+    onError: (e) => toast.error(e.message),
+  });
 
   // El servidor calcula distancia, radio y tarifa; aquí solo se muestra la cotización.
   const quote = trpc.orders.quote.useQuery(
@@ -127,6 +138,20 @@ export default function Cart() {
           placeholder="Dirección en Milagro (calle, número, referencia)"
           className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
         />
+        {isAuthenticated && (savedAddresses.data?.length ?? 0) > 0 && (
+          <div className="space-y-2 rounded-2xl bg-secondary/60 p-3">
+            <p className="text-xs font-extrabold">Mis direcciones guardadas</p>
+            {savedAddresses.data!.map((saved) => (
+              <div key={saved.id} className="flex items-center gap-2 rounded-xl bg-card p-3">
+                <button type="button" onClick={() => { setAddress(saved.address); setDeliveryCoords({ lat: saved.lat, lng: saved.lng }); }} className="min-w-0 flex-1 text-left">
+                  <span className="block text-sm font-extrabold">{saved.label}{saved.isDefault ? " · Principal" : ""}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{saved.address}</span>
+                </button>
+                <button type="button" aria-label={`Eliminar ${saved.label}`} onClick={() => deleteAddress.mutate({ id: saved.id })} className="rounded-lg px-2 py-1 text-xs font-bold text-destructive">Eliminar</button>
+              </div>
+            ))}
+          </div>
+        )}
         <button
           type="button"
           disabled={locating || !navigator.geolocation}
@@ -156,6 +181,14 @@ export default function Cart() {
         <p className="text-[11px] text-muted-foreground">
           La ubicación se usa para calcular la distancia, el costo de envío y la llegada estimada. Verifica que coincida con la dirección escrita.
         </p>
+        {isAuthenticated && address.trim().length >= 5 && deliveryCoords && (
+          <div className="flex gap-2">
+            <input value={addressLabel} onChange={(e) => setAddressLabel(e.target.value)} maxLength={60} placeholder="Nombre: Casa, Trabajo…" className="min-w-0 flex-1 rounded-xl border border-input bg-background px-3 py-2 text-sm" />
+            <button type="button" disabled={saveAddress.isPending || !addressLabel.trim()} onClick={() => saveAddress.mutate({ label: addressLabel.trim(), address: address.trim(), lat: deliveryCoords.lat, lng: deliveryCoords.lng, isDefault: (savedAddresses.data?.length ?? 0) === 0 })} className="rounded-xl bg-brand px-4 py-2 text-sm font-extrabold text-white disabled:opacity-50">
+              {saveAddress.isPending ? "Guardando…" : "Guardar dirección"}
+            </button>
+          </div>
+        )}
         <input
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
