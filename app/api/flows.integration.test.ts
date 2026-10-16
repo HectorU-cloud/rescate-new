@@ -79,7 +79,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
   async function mkBusiness(ownerId: number, over: Partial<typeof S.businesses.$inferInsert> = {}) {
     const [{ id }] = await db
       .insert(S.businesses)
-      .values({ ownerId, name: `${tag} local`, category: "test", address: "Calle 1", lat: -2.134, lng: -79.594, approvalStatus: "approved", ...over })
+      .values({ ownerId, name: `${tag} local`, category: "test", address: "Calle 1", lat: -2.134, lng: -79.594, approvalStatus: "approved", locationConfirmed: true, ...over })
       .$returningId();
     created.businesses.push(id);
     return id;

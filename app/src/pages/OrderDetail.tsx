@@ -6,6 +6,7 @@ import { StatusTimeline } from "@/components/StatusTimeline";
 import { ChatBox } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 import { RatingBox } from "@/components/RatingBox";
+import { CodeNotice } from "@/components/CodeNotice";
 import { money, timeAgo } from "@/lib/format";
 import { MILAGRO } from "@contracts/constants";
 import { toast } from "sonner";
@@ -38,6 +39,14 @@ export default function OrderDetail() {
   const cancel = trpc.orders.cancel.useMutation({
     onSuccess: () => {
       toast.success("Pedido cancelado");
+      utils.orders.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const regenerate = trpc.orders.regenerateCode.useMutation({
+    onSuccess: () => {
+      toast.success("Código nuevo generado");
       utils.orders.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -130,6 +139,7 @@ export default function OrderDetail() {
           <p className="mt-1 text-xs font-semibold text-rescue-dark/70">
             Pagas en efectivo en el local · {business?.address}
           </p>
+          <CodeNotice attempts={order.codeAttempts} pending={regenerate.isPending} onRegenerate={() => regenerate.mutate({ id: order.id })} />
         </section>
       )}
 
@@ -138,6 +148,7 @@ export default function OrderDetail() {
           <p className="text-xs font-extrabold uppercase tracking-wide text-brand-dark">Código para confirmar tu entrega</p>
           <p className="font-display mt-2 text-4xl font-extrabold tracking-[0.3em] text-brand-dark">{order.deliveryConfirmationCode}</p>
           <p className="mt-2 text-xs font-semibold text-brand-dark/80">Compártelo con el repartidor únicamente cuando recibas tu pedido. No lo envíes por el chat antes de la entrega.</p>
+          <CodeNotice attempts={order.codeAttempts} pending={regenerate.isPending} onRegenerate={() => regenerate.mutate({ id: order.id })} />
         </section>
       )}
 

@@ -6,7 +6,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
-import { isBusinessOpenNow, isPackReservable, quoteDelivery } from "./lib/business-rules";
+import { isBusinessOpenNow, isBusinessPublic, isPackReservable, quoteDelivery } from "./lib/business-rules";
 import { logOrderEvent } from "./lib/order-events";
 import { recomputeBusinessRating, recomputeCourierRating } from "./lib/ratings";
 import { canCustomerCancel } from "./lib/order-rules";
@@ -80,7 +80,7 @@ export const ordersRouter = createRouter({
       const business = await db.query.businesses.findFirst({
         where: eq(businesses.id, input.businessId),
       });
-      if (!business || business.approvalStatus !== "approved") {
+      if (!business || !isBusinessPublic(business)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "El local no está disponible" });
       }
       if (!isBusinessOpenNow(business)) {
@@ -166,6 +166,11 @@ export const ordersRouter = createRouter({
       if (!pack || !pack.isActive || pack.quantityLeft < input.quantity) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pack ya no está disponible" });
       }
+      // Un local suspendido, sin aprobar o sin ubicación confirmada no puede recibir reservas
+      const packBusiness = await db.query.businesses.findFirst({ where: eq(businesses.id, pack.businessId) });
+      if (!packBusiness || !isBusinessPublic(packBusiness)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Este pack ya no está disponible" });
+      }
       if (!isPackReservable(pack.pickupStart, pack.pickupEnd)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -238,7 +243,7 @@ export const ordersRouter = createRouter({
     }))
     .query(async ({ input }) => {
       const business = await getDb().query.businesses.findFirst({ where: eq(businesses.id, input.businessId) });
-      if (!business || business.approvalStatus !== "approved") throw new TRPCError({ code: "NOT_FOUND", message: "El local no está disponible" });
+      if (!business || !isBusinessPublic(business)) throw new TRPCError({ code: "NOT_FOUND", message: "El local no está disponible" });
       return {
         ...quoteDelivery(business, input.lat, input.lng),
         openNow: isBusinessOpenNow(business),
@@ -412,9 +417,37 @@ export const ordersRouter = createRouter({
         const [row] = await db.select().from(users).where(eq(users.id, order.courierId!)).limit(1);
         courier = row ? toPublicCourier(row) : null;
       }
-      // El código de confirmación solo se revela al cliente dueño del pedido.
-      const visibleOrder = order.customerId !== ctx.user.id ? { ...order, deliveryConfirmationCode: null } : order;
+      // Los códigos (entrega y retiro) solo se revelan al cliente dueño del pedido.
+      const visibleOrder = order.customerId !== ctx.user.id ? { ...order, deliveryConfirmationCode: null, pickupCode: null } : order;
       return { ...data, order: visibleOrder, courier };
+    }),
+
+  // El cliente genera un código nuevo (entrega o retiro) si se agotaron los intentos
+  // o si sospecha que alguien lo vio. Reinicia el contador de intentos.
+  regenerateCode: authedQuery
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const db = getDb();
+      const order = await db.query.orders.findFirst({
+        where: and(eq(orders.id, input.id), eq(orders.customerId, ctx.user.id)),
+      });
+      const isDelivery = order?.type === "delivery" && order.status === "picked_up";
+      const isRescue = order?.type === "rescue" && ["accepted", "preparing", "ready"].includes(order.status);
+      if (!order || (!isDelivery && !isRescue)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes generar un código nuevo para este pedido" });
+      }
+      const code = String(randomInt(100000, 1000000));
+      const [res] = await db
+        .update(orders)
+        .set(isDelivery
+          ? { deliveryConfirmationCode: code, codeAttempts: 0, updatedAt: order.updatedAt }
+          : { pickupCode: code, codeAttempts: 0, updatedAt: order.updatedAt })
+        .where(and(eq(orders.id, order.id), eq(orders.customerId, ctx.user.id), eq(orders.status, order.status)));
+      if (res.affectedRows === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido cambió de estado. Actualiza la pantalla." });
+      }
+      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "customer", type: "code_regenerated" });
+      return { ok: true };
     }),
 
   cancel: authedQuery

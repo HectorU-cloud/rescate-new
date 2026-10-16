@@ -139,7 +139,7 @@ async function main() {
       .$returningId();
     const [{ id }] = await db
       .insert(businesses)
-      .values({ ...b, ownerId })
+      .values({ ...b, ownerId, locationConfirmed: true })
       .$returningId();
     bizIds[b.name] = id;
   }

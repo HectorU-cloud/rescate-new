@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { randomInt } from "node:crypto";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
 import { logOrderEvent } from "./lib/order-events";
+import { redactForCourierBoard } from "./lib/order-privacy";
+import { codesMatch } from "./lib/codes";
 import { MAX_ACTIVE_DELIVERIES, canCourierRelease, hasReachedActiveLimit } from "./lib/order-rules";
 import { BUSINESS_RULES } from "@contracts/constants";
 import { businesses, courierLocations, orderItems, orders, users } from "@db/schema";
@@ -61,7 +63,8 @@ export const courierRouter = createRouter({
       .orderBy(desc(orders.createdAt));
     const bizRows = await db.select().from(businesses);
     const byId = new Map(bizRows.map((b) => [b.id, b]));
-    return rows.map((o) => ({ order: o, business: byId.get(o.businessId) ?? null }));
+    // Antes de aceptar no se revelan datos del cliente (teléfono, dirección, coordenadas, notas).
+    return rows.map((o) => ({ order: redactForCourierBoard(o), business: byId.get(o.businessId) ?? null }));
   }),
 
   accept: authedQuery
@@ -93,7 +96,7 @@ export const courierRouter = createRouter({
       // La condición del WHERE hace la toma atómica: si dos repartidores pulsan a la vez, solo uno gana.
       const [res] = await db
         .update(orders)
-        .set({ courierId: ctx.user.id, status: "picked_up", deliveryConfirmationCode, courierAcceptedAt: new Date() })
+        .set({ courierId: ctx.user.id, status: "picked_up", deliveryConfirmationCode, codeAttempts: 0, courierAcceptedAt: new Date() })
         .where(and(eq(orders.id, order.id), eq(orders.status, "ready"), isNull(orders.courierId)));
       if (res.affectedRows === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido ya fue tomado" });
@@ -119,7 +122,7 @@ export const courierRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: `Solo puedes soltar un pedido durante los primeros ${BUSINESS_RULES.courierReleaseWindowMin} minutos. Si hay un problema, contacta al soporte.` });
       }
       const [res] = await db.update(orders).set({
-        courierId: null, status: "ready", deliveryConfirmationCode: null, courierAcceptedAt: null,
+        courierId: null, status: "ready", deliveryConfirmationCode: null, codeAttempts: 0, courierAcceptedAt: null,
         // El plazo para que otro lo tome se reinicia, pero el cliente no espera de más.
         readyAt: new Date(), courierReminderSentAt: null,
       }).where(and(eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
@@ -196,10 +199,34 @@ export const courierRouter = createRouter({
       if (!order) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes entregar este pedido" });
       }
-      if (!order.deliveryConfirmationCode || order.deliveryConfirmationCode !== input.confirmationCode) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "El código de confirmación no coincide. Pide al cliente que lo revise." });
+      // Puerta anti fuerza bruta: cada intento consume uno ANTES de comparar el código y la condición
+      // es atómica, así que aunque lleguen 100 intentos en paralelo solo pasan los primeros 5.
+      const [gate] = await db.update(orders)
+        .set({ codeAttempts: sql`${orders.codeAttempts} + 1`, updatedAt: order.updatedAt })
+        .where(and(
+          eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up"),
+          lt(orders.codeAttempts, BUSINESS_RULES.maxCodeAttempts),
+        ));
+      if (gate.affectedRows === 0) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Se agotaron los intentos para confirmar esta entrega. Pide al cliente que genere un código nuevo desde su pedido." });
       }
-      await db.update(orders).set({ status: "delivered", deliveryConfirmationCode: null, deliveredAt: new Date() }).where(eq(orders.id, order.id));
+      if (!codesMatch(order.deliveryConfirmationCode, input.confirmationCode)) {
+        const [fresh] = await db.select({ attempts: orders.codeAttempts }).from(orders).where(eq(orders.id, order.id)).limit(1);
+        const left = Math.max(0, BUSINESS_RULES.maxCodeAttempts - (fresh?.attempts ?? BUSINESS_RULES.maxCodeAttempts));
+        if (left === 0) {
+          await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "code_locked" });
+          await sendPushToUser(order.customerId, { title: "Código de entrega bloqueado", body: "Se intentó confirmar tu entrega con un código incorrecto varias veces. Genera un código nuevo desde tu pedido.", orderId: order.id }).catch(() => undefined);
+        }
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: left > 0
+            ? `El código no coincide. Te quedan ${left} intento${left === 1 ? "" : "s"}.`
+            : "El código no coincide y se agotaron los intentos. Pide al cliente que genere un código nuevo.",
+        });
+      }
+      const [done] = await db.update(orders).set({ status: "delivered", deliveryConfirmationCode: null, deliveredAt: new Date() })
+        .where(and(eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
+      if (done.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido ya cambió de estado" });
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "status:delivered" });
       await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "delivered", type: order.type });
       // Eliminar la posición al cerrar la entrega para no conservar datos de ubicación innecesarios.

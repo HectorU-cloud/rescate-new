@@ -8,6 +8,8 @@ import { BUSINESS_RULES } from "@contracts/constants";
 import { ChatBox } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 
+const isLocked = (attempts: number) => attempts >= BUSINESS_RULES.maxCodeAttempts;
+
 export default function CourierPanel() {
   const { user, isAuthenticated } = useAuth({
     redirectOnUnauthenticated: true,
@@ -170,6 +172,18 @@ export default function CourierPanel() {
                   cobra {money(order.total)} en efectivo
                 </p>
               </div>
+              <div className="mt-2 flex gap-2 text-xs font-extrabold">
+                {business?.lat != null && business?.lng != null && (
+                  <a href={`https://www.google.com/maps/dir/?api=1&destination=${business.lat},${business.lng}`} target="_blank" rel="noreferrer" className="flex-1 rounded-xl bg-secondary py-2 text-center">
+                    🧭 Ir al local
+                  </a>
+                )}
+                {order.deliveryLat != null && order.deliveryLng != null && (
+                  <a href={`https://www.google.com/maps/dir/?api=1&destination=${order.deliveryLat},${order.deliveryLng}`} target="_blank" rel="noreferrer" className="flex-1 rounded-xl bg-secondary py-2 text-center">
+                    🧭 Ir con el cliente
+                  </a>
+                )}
+              </div>
               <div className="mt-3 rounded-xl bg-secondary p-3">
                 <label htmlFor={`delivery-code-${order.id}`} className="mb-1 block text-xs font-extrabold">
                   Código de confirmación del cliente
@@ -179,6 +193,7 @@ export default function CourierPanel() {
                   inputMode="numeric"
                   autoComplete="one-time-code"
                   maxLength={6}
+                  disabled={isLocked(order.codeAttempts)}
                   value={confirmationCodes[order.id] ?? ""}
                   onChange={(event) => setConfirmationCodes((current) => ({
                     ...current,
@@ -187,7 +202,17 @@ export default function CourierPanel() {
                   placeholder="6 dígitos"
                   className="w-full rounded-xl border border-border bg-card px-3 py-2 text-center text-lg font-extrabold tracking-[0.35em] outline-none focus:ring-2 focus:ring-brand"
                 />
-                <p className="mt-1 text-xs text-muted-foreground">Pide el código al cliente cuando le entregues el pedido.</p>
+                {isLocked(order.codeAttempts) ? (
+                  <p className="mt-1 text-xs font-bold text-destructive">
+                    🔒 Intentos agotados. Pide al cliente que genere un código nuevo desde su pedido y vuelve a intentarlo.
+                  </p>
+                ) : order.codeAttempts > 0 ? (
+                  <p className="mt-1 text-xs font-bold text-amber-800">
+                    Intentos fallidos: {order.codeAttempts} de {BUSINESS_RULES.maxCodeAttempts}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">Pide el código al cliente cuando le entregues el pedido.</p>
+                )}
               </div>
               {withinMinutes(order.courierAcceptedAt, BUSINESS_RULES.courierReleaseWindowMin) && (
                 <button
@@ -203,7 +228,7 @@ export default function CourierPanel() {
                 </button>
               )}
               <button
-                disabled={deliver.isPending || (confirmationCodes[order.id] ?? "").length !== 6}
+                disabled={deliver.isPending || isLocked(order.codeAttempts) || (confirmationCodes[order.id] ?? "").length !== 6}
                 onClick={() => deliver.mutate({ orderId: order.id, confirmationCode: confirmationCodes[order.id] ?? "" })}
                 className="mt-3 w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50"
               >
@@ -250,8 +275,9 @@ export default function CourierPanel() {
                   </span>
                 </p>
                 <p className="truncate text-xs font-semibold text-muted-foreground">
-                  📍 {order.deliveryAddress}{order.deliveryDistanceKm != null ? ` · ${order.deliveryDistanceKm} km` : ""}
+                  📍 {order.deliveryDistanceKm != null ? `A ${order.deliveryDistanceKm} km del local` : "Entrega a domicilio"} · cobras {money(order.total)} en efectivo
                 </p>
+                <p className="text-[11px] text-muted-foreground">La dirección del cliente se muestra al aceptar.</p>
               </div>
               <button
                 disabled={accept.isPending}

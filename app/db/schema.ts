@@ -106,6 +106,8 @@ export const businesses = mysqlTable(
     // Los comercios nuevos entran como "pending" y no se muestran hasta que un admin los apruebe.
     approvalStatus: mysqlEnum("approvalStatus", ["pending", "approved", "rejected"]).default("approved").notNull(),
     approvalNote: varchar("approvalNote", { length: 300 }),
+    // El dueño marcó el punto exacto de su local en el mapa (tarifa por km, radio y navegación dependen de él)
+    locationConfirmed: boolean("locationConfirmed").default(false).notNull(),
     deliveryMinutes: int("deliveryMinutes").default(30).notNull(),
     rating: double("rating").default(4.5).notNull(),
     // Cantidad de calificaciones reales que respaldan el rating (0 = aún sin calificaciones)
@@ -226,6 +228,8 @@ export const orders = mysqlTable(
     // Momento en que quedó "listo" (para el tiempo límite de espera de repartidor)
     readyAt: timestamp("readyAt"),
     courierReminderSentAt: timestamp("courierReminderSentAt"),
+    // Intentos fallidos al confirmar el código de entrega (delivery) o de retiro (rescate)
+    codeAttempts: int("codeAttempts").default(0).notNull(),
     // Recordatorio al comercio cuando un delivery aceptado/en cocina no avanza (se reinicia al cambiar de estado)
     businessReminderSentAt: timestamp("businessReminderSentAt"),
     courierAcceptedAt: timestamp("courierAcceptedAt"),

@@ -128,4 +128,10 @@ export const BUSINESS_RULES = {
   // a los 25 min se le recuerda por push y a los 60 min se cancela solo.
   businessProgressReminderMin: 25,
   businessProgressTimeoutMin: 60,
+  // Intentos fallidos permitidos al confirmar un código de entrega o de retiro.
+  maxCodeAttempts: 5,
+  // La plataforma solo opera cerca de Milagro: ubicaciones de locales más lejos se rechazan.
+  serviceAreaRadiusKm: 40,
+  // Si un local ya confirmado mueve su pin más de estos metros, vuelve a revisión del admin.
+  locationReviewMeters: 300,
 } as const;

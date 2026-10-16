@@ -72,6 +72,11 @@ export function isWithinHours(opensAt: string, closesAt: string, now = new Date(
   return open < close ? cur >= open && cur < close : cur >= open || cur < close;
 }
 
+/** Un comercio es público (visible y con pedidos) si el admin lo aprobó Y marcó su ubicación real. */
+export function isBusinessPublic(b: { approvalStatus: string; locationConfirmed: boolean }) {
+  return b.approvalStatus === "approved" && b.locationConfirmed;
+}
+
 /** Abierto = el comercio lo tiene activado manualmente Y está dentro de su horario. */
 export function isBusinessOpenNow(b: { isOpen: boolean; opensAt: string; closesAt: string }, now = new Date()) {
   return b.isOpen && isWithinHours(b.opensAt, b.closesAt, now);

@@ -1,12 +1,14 @@
 import { z } from "zod";
-import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
 import { BUSINESS_RULES } from "@contracts/constants";
+import { distanceMeters, isInServiceArea } from "@contracts/geo";
+import { codesMatch } from "./lib/codes";
 import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
-import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUsers } from "./lib/push-notifications";
+import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
 import { logOrderEvent } from "./lib/order-events";
 import { MIN_CANCEL_REASON_LENGTH, businessCancelNeedsReason, businessCancelableFrom, canBusinessCancel } from "./lib/order-rules";
 import { startOfDayEcuador } from "./lib/business-rules";
@@ -32,6 +34,46 @@ async function requireMyBusiness(userId: number) {
     });
   }
   return biz;
+}
+
+function assertInServiceArea(lat: number, lng: number) {
+  if (!isInServiceArea(lat, lng)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `La ubicación está fuera de la zona de servicio (${BUSINESS_RULES.serviceAreaRadiusKm} km alrededor de Milagro). Revisa el pin en el mapa.`,
+    });
+  }
+}
+
+/**
+ * Campos a guardar al fijar la ubicación real del local. Si el local ya estaba confirmado y aprobado
+ * y mueve el pin más de `locationReviewMeters`, vuelve a revisión (evita aprobar un sitio y cambiarlo).
+ */
+function locationChange(
+  current: { lat: number; lng: number; locationConfirmed: boolean; approvalStatus: string },
+  lat: number,
+  lng: number,
+) {
+  assertInServiceArea(lat, lng);
+  const moved = distanceMeters(current.lat, current.lng, lat, lng);
+  const needsReview =
+    current.locationConfirmed && current.approvalStatus === "approved" && moved > BUSINESS_RULES.locationReviewMeters;
+  return {
+    needsReview,
+    fields: {
+      lat,
+      lng,
+      locationConfirmed: true,
+      ...(needsReview
+        ? { approvalStatus: "pending" as const, approvalNote: "Cambió la ubicación del local: requiere nueva revisión.", isOpen: false }
+        : {}),
+    },
+  };
+}
+
+async function notifyAdminsLocationReview(businessName: string) {
+  const admins = await getDb().select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+  await sendPushToUsers(admins.map((a) => a.id), { title: "Local movió su ubicación 📍", body: `${businessName} requiere nueva revisión.`, url: "/admin" }).catch(() => undefined);
 }
 
 // Transiciones que el comercio puede aplicar
@@ -82,28 +124,42 @@ export const businessRouter = createRouter({
         minOrder: z.number().min(0).max(200).optional(),
         opensAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM)").optional(),
         closesAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM)").optional(),
+        // Ubicación real del local (pin del mapa). Obligatoria al registrarlo.
+        lat: z.number().min(-90).max(90).optional(),
+        lng: z.number().min(-180).max(180).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const { lat, lng, ...data } = input;
+      if ((lat === undefined) !== (lng === undefined)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Envía latitud y longitud juntas" });
+      }
       const db = getDb();
       const existing = await db.query.businesses.findFirst({
         where: eq(businesses.ownerId, ctx.user.id),
       });
       if (existing) {
+        const loc = lat !== undefined && lng !== undefined ? locationChange(existing, lat, lng) : null;
         await db
           .update(businesses)
           // Un comercio rechazado que corrige sus datos vuelve a revisión.
-          .set({ ...input, ...(existing.approvalStatus === "rejected" ? { approvalStatus: "pending" as const, approvalNote: null } : {}) })
+          .set({ ...data, ...(existing.approvalStatus === "rejected" ? { approvalStatus: "pending" as const, approvalNote: null } : {}), ...(loc?.fields ?? {}) })
           .where(eq(businesses.id, existing.id));
+        if (loc?.needsReview) await notifyAdminsLocationReview(existing.name);
         return { id: existing.id };
       }
+      if (lat === undefined || lng === undefined) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Marca la ubicación de tu local en el mapa" });
+      }
+      assertInServiceArea(lat, lng);
       const [{ id }] = await db
         .insert(businesses)
         .values({
-          ...input,
+          ...data,
           ownerId: ctx.user.id,
-          lat: -2.134 + (Math.random() - 0.5) * 0.01,
-          lng: -79.594 + (Math.random() - 0.5) * 0.01,
+          lat,
+          lng,
+          locationConfirmed: true,
           approvalStatus: "pending",
         })
         .$returningId();
@@ -130,12 +186,26 @@ export const businessRouter = createRouter({
       return { ok: true };
     }),
 
+  // Fija (o corrige) el punto exacto del local en el mapa
+  setLocation: authedQuery
+    .input(z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }))
+    .mutation(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      const { fields, needsReview } = locationChange(biz, input.lat, input.lng);
+      await getDb().update(businesses).set(fields).where(eq(businesses.id, biz.id));
+      if (needsReview) await notifyAdminsLocationReview(biz.name);
+      return { ok: true, needsReview };
+    }),
+
   toggleOpen: authedQuery
     .input(z.object({ isOpen: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
       if (input.isOpen && biz.approvalStatus !== "approved") {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Tu negocio aún no ha sido aprobado por el equipo." });
+      }
+      if (input.isOpen && !biz.locationConfirmed) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Marca la ubicación de tu local en el mapa antes de abrir." });
       }
       await getDb()
         .update(businesses)
@@ -170,14 +240,20 @@ export const businessRouter = createRouter({
         byOrder.set(it.orderId, arr);
       }
       return filtered.map((o) => ({
-        // El código de confirmación es exclusivo del cliente; el comercio no debe verlo.
-        order: { ...o, deliveryConfirmationCode: null },
+        // Los códigos (entrega y retiro) son exclusivos del cliente; el comercio debe pedírselos.
+        order: { ...o, deliveryConfirmationCode: null, pickupCode: null, needsPickupCode: o.type === "rescue" && !!o.pickupCode },
         items: byOrder.get(o.id) ?? [],
       }));
     }),
 
   updateOrderStatus: authedQuery
-    .input(z.object({ orderId: z.number().int().positive(), status: z.string(), reason: z.string().trim().max(300).optional() }))
+    .input(z.object({
+      orderId: z.number().int().positive(),
+      status: z.string(),
+      reason: z.string().trim().max(300).optional(),
+      // Código de retiro que el cliente muestra al recoger un rescate
+      pickupCode: z.string().regex(/^\d{6}$/, "El código tiene 6 dígitos").optional(),
+    }))
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
       const db = getDb();
@@ -210,6 +286,30 @@ export const businessRouter = createRouter({
         await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: "cancelled", detail: input.reason });
         await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "cancelled", type: order.type, reason: input.reason });
         return { ok: true };
+      }
+      // Entregar un rescate exige el código de retiro del cliente (con límite de intentos).
+      if (next === "delivered" && order.type === "rescue" && order.pickupCode) {
+        if (!input.pickupCode) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Pide al cliente su código de retiro de 6 dígitos" });
+        }
+        const [gate] = await db.update(orders)
+          .set({ codeAttempts: sql`${orders.codeAttempts} + 1`, updatedAt: order.updatedAt })
+          .where(and(eq(orders.id, order.id), eq(orders.status, order.status), lt(orders.codeAttempts, BUSINESS_RULES.maxCodeAttempts)));
+        if (gate.affectedRows === 0) {
+          throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Se agotaron los intentos. El cliente puede generar un código nuevo desde su pedido." });
+        }
+        if (!codesMatch(order.pickupCode, input.pickupCode)) {
+          const [fresh] = await db.select({ attempts: orders.codeAttempts }).from(orders).where(eq(orders.id, order.id)).limit(1);
+          const left = Math.max(0, BUSINESS_RULES.maxCodeAttempts - (fresh?.attempts ?? BUSINESS_RULES.maxCodeAttempts));
+          if (left === 0) {
+            await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: "code_locked" });
+            await sendPushToUser(order.customerId, { title: "Código de retiro bloqueado", body: "Se intentó confirmar tu retiro con un código incorrecto varias veces. Genera un código nuevo desde tu pedido.", orderId: order.id }).catch(() => undefined);
+          }
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: left > 0 ? `El código no coincide. Te quedan ${left} intento${left === 1 ? "" : "s"}.` : "El código no coincide y se agotaron los intentos. El cliente debe generar un código nuevo.",
+          });
+        }
       }
       const [res] = await db.update(orders).set({
         status: next,
@@ -310,9 +410,9 @@ export const businessRouter = createRouter({
         imageUrl: z.string().max(500_000).optional().nullable(),
         originalPrice: z.number().min(0.5).max(500),
         rescuePrice: z.number().min(0.25).max(500),
-        quantityTotal: z.number().min(1).max(100),
-        pickupStart: z.string().regex(/^\d{2}:\d{2}$/),
-        pickupEnd: z.string().regex(/^\d{2}:\d{2}$/),
+        quantityTotal: z.number().int().min(1).max(100),
+        pickupStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM)"),
+        pickupEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Hora inválida (HH:MM)"),
       }),
     )
     .mutation(async ({ ctx, input }) => {

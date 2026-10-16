@@ -7,6 +7,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
 import { money, timeAgo, withinMinutes } from "@/lib/format";
 import { ClaimBox } from "@/components/ClaimBox";
+import { LocationPicker, type Point } from "@/components/LocationPicker";
+import { isInServiceArea } from "@contracts/geo";
 import {
   BUSINESS_CATEGORIES,
   BUSINESS_RULES,
@@ -57,6 +59,7 @@ export default function BusinessPanel() {
 // ---------------------------------------------------------------------------
 function BusinessSetup() {
   const utils = trpc.useUtils();
+  const [loc, setLoc] = useState<Point | null>(null);
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -160,9 +163,16 @@ function BusinessSetup() {
           Envío = tarifa base + costo por km según la distancia al cliente. Horario en hora de Ecuador.
         </p>
         {field("Emoji de tu local", "emoji", { placeholder: "🍕", maxLength: 4 })}
+        <div className="space-y-2">
+          <p className="text-xs font-extrabold text-muted-foreground">📍 Ubicación exacta de tu local</p>
+          <p className="text-[11px] text-muted-foreground">
+            De este punto salen el costo de envío por km, el radio de entrega y la ruta del repartidor. Es obligatoria.
+          </p>
+          <LocationPicker value={loc} onChange={setLoc} />
+        </div>
         <button
-          disabled={save.isPending || form.name.length < 2 || form.address.length < 5}
-          onClick={() => save.mutate(form)}
+          disabled={save.isPending || form.name.length < 2 || form.address.length < 5 || !loc || !isInServiceArea(loc.lat, loc.lng)}
+          onClick={() => loc && save.mutate({ ...form, lat: loc.lat, lng: loc.lng })}
           className="w-full rounded-2xl bg-brand py-3.5 font-display text-base font-extrabold text-white disabled:opacity-50"
         >
           {save.isPending ? "Guardando…" : "Enviar mi local a revisión"}
@@ -189,6 +199,9 @@ function Panel({
   business: {
     approvalStatus: "pending" | "approved" | "rejected";
     approvalNote: string | null;
+    locationConfirmed: boolean;
+    lat: number;
+    lng: number;
     deliveryFee: number;
     feePerKm: number;
     deliveryRadiusKm: number;
@@ -239,6 +252,8 @@ function Panel({
         </p>
       )}
 
+      <LocationCard business={business} />
+
       <DeliveryRulesCard business={business} />
 
       {/* Stats */}
@@ -279,6 +294,55 @@ function Panel({
       {tab === "rescate" && <RescueTab />}
       {tab === "resenas" && <ReviewsTab />}
     </div>
+  );
+}
+
+function LocationCard({ business }: { business: { locationConfirmed: boolean; lat: number; lng: number } }) {
+  const utils = trpc.useUtils();
+  const [loc, setLoc] = useState<Point | null>(business.locationConfirmed ? { lat: business.lat, lng: business.lng } : null);
+  const save = trpc.business.setLocation.useMutation({
+    onSuccess: (r) => {
+      if (r.needsReview) toast.warning("Moviste el local: el equipo lo revisará de nuevo antes de que vuelva a ser visible.");
+      else toast.success("Ubicación guardada");
+      utils.business.myBusiness.invalidate();
+      utils.catalog.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const changed = !!loc && (!business.locationConfirmed || loc.lat !== business.lat || loc.lng !== business.lng);
+  const body = (
+    <div className="mt-3 space-y-3">
+      <LocationPicker value={loc} onChange={setLoc} />
+      <button
+        disabled={save.isPending || !changed || !loc || !isInServiceArea(loc.lat, loc.lng)}
+        onClick={() => loc && save.mutate(loc)}
+        className="w-full rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
+      >
+        {save.isPending ? "Guardando…" : "Guardar ubicación"}
+      </button>
+      {business.locationConfirmed && (
+        <p className="text-[11px] text-muted-foreground">
+          Si mueves el pin más de {BUSINESS_RULES.locationReviewMeters} m, tu local vuelve a revisión.
+        </p>
+      )}
+    </div>
+  );
+  if (!business.locationConfirmed) {
+    return (
+      <section className="rounded-2xl bg-amber-100 p-4 text-amber-950">
+        <p className="text-sm font-extrabold">📍 Marca la ubicación real de tu local</p>
+        <p className="mt-1 text-xs font-semibold">
+          Hasta que lo hagas tu local no aparece para los clientes, no recibe pedidos y no puede aprobarse. El costo de envío y la ruta del repartidor dependen de este punto.
+        </p>
+        {body}
+      </section>
+    );
+  }
+  return (
+    <details className="rounded-2xl bg-card p-4 shadow-sm ring-1 ring-border">
+      <summary className="cursor-pointer text-sm font-extrabold">📍 Ubicación del local ✅ confirmada</summary>
+      {body}
+    </details>
   );
 }
 
@@ -386,6 +450,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 function OrdersTab({ businessId }: { businessId: number }) {
   void businessId;
   const utils = trpc.useUtils();
+  const [pickupCodes, setPickupCodes] = useState<Record<number, string>>({});
   const list = trpc.business.orders.useQuery(
     { activeOnly: true },
     { refetchInterval: 10_000 },
@@ -500,7 +565,7 @@ function OrdersTab({ businessId }: { businessId: number }) {
               </p>
             ) : (
               <p className="mt-2 rounded-xl bg-rescue-soft px-3 py-1.5 text-xs font-extrabold text-rescue-dark">
-                🧡 Rescate · código de retiro: {order.pickupCode}
+                🧡 Rescate · pide al cliente su código de retiro (6 dígitos)
               </p>
             )}
             {order.notes && (
@@ -515,11 +580,41 @@ function OrdersTab({ businessId }: { businessId: number }) {
                   ` · si no avanza, se cancelará solo a los ${BUSINESS_RULES.businessProgressTimeoutMin} min`}
               </p>
             )}
+            {order.type === "rescue" && order.status === "ready" && order.needsPickupCode && (
+              <div className="mt-3 rounded-xl bg-secondary p-3">
+                <label htmlFor={`pickup-code-${order.id}`} className="mb-1 block text-xs font-extrabold">
+                  Código de retiro que muestra el cliente
+                </label>
+                <input
+                  id={`pickup-code-${order.id}`}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  maxLength={6}
+                  disabled={order.codeAttempts >= BUSINESS_RULES.maxCodeAttempts}
+                  value={pickupCodes[order.id] ?? ""}
+                  onChange={(e) => setPickupCodes((c) => ({ ...c, [order.id]: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                  placeholder="6 dígitos"
+                  className="w-full rounded-xl border border-border bg-card px-3 py-2 text-center text-lg font-extrabold tracking-[0.35em] outline-none focus:ring-2 focus:ring-brand disabled:opacity-50"
+                />
+                {order.codeAttempts >= BUSINESS_RULES.maxCodeAttempts ? (
+                  <p className="mt-1 text-xs font-bold text-destructive">🔒 Intentos agotados: el cliente debe generar un código nuevo desde su pedido.</p>
+                ) : order.codeAttempts > 0 ? (
+                  <p className="mt-1 text-xs font-bold text-amber-800">Intentos fallidos: {order.codeAttempts} de {BUSINESS_RULES.maxCodeAttempts}</p>
+                ) : null}
+              </div>
+            )}
             <div className="mt-3 flex gap-2">
               {next && !(order.type === "delivery" && order.status === "ready") && (
                 <button
-                  disabled={update.isPending}
-                  onClick={() => update.mutate({ orderId: order.id, status: next })}
+                  disabled={
+                    update.isPending ||
+                    (next === "delivered" && order.needsPickupCode && ((pickupCodes[order.id] ?? "").length !== 6 || order.codeAttempts >= BUSINESS_RULES.maxCodeAttempts))
+                  }
+                  onClick={() => update.mutate({
+                    orderId: order.id,
+                    status: next,
+                    ...(next === "delivered" && order.needsPickupCode ? { pickupCode: pickupCodes[order.id] } : {}),
+                  })}
                   className="flex-1 rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
                 >
                   {NEXT_LABEL[next]}

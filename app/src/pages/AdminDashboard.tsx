@@ -202,6 +202,18 @@ function BusinessesTab() {
               <h2 className="font-extrabold">{b.emoji} {b.name}</h2>
               <p className="text-xs font-semibold text-muted-foreground">{b.address} · {b.phone ?? "sin teléfono"}</p>
               <p className="text-xs text-muted-foreground">Dueño: {b.ownerName ?? "—"} · {b.ownerEmail ?? "sin correo"}</p>
+              <p className={`text-xs font-bold ${b.locationConfirmed ? "text-brand-dark" : "text-destructive"}`}>
+                {b.locationConfirmed ? (
+                  <>
+                    📍 Ubicación confirmada ·{" "}
+                    <a href={`https://www.google.com/maps?q=${b.lat},${b.lng}`} target="_blank" rel="noreferrer" className="underline">
+                      ver en el mapa
+                    </a>
+                  </>
+                ) : (
+                  "⚠️ Aún no marcó su ubicación en el mapa: no se puede aprobar"
+                )}
+              </p>
             </div>
             <span className="shrink-0 text-[11px] font-bold text-muted-foreground">{timeAgo(b.createdAt)}</span>
           </div>
@@ -212,7 +224,7 @@ function BusinessesTab() {
           <div className="flex gap-2">
             {b.approvalStatus !== "approved" && (
               <button
-                disabled={review.isPending}
+                disabled={review.isPending || !b.locationConfirmed}
                 onClick={() => review.mutate({ id: b.id, decision: "approved" })}
                 className="flex-1 rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
               >

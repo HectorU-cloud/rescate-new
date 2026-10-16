@@ -109,6 +109,7 @@ export const adminRouter = createRouter({
         .select({
           id: businesses.id, name: businesses.name, category: businesses.category, address: businesses.address,
           phone: businesses.phone, emoji: businesses.emoji, approvalStatus: businesses.approvalStatus, approvalNote: businesses.approvalNote,
+          lat: businesses.lat, lng: businesses.lng, locationConfirmed: businesses.locationConfirmed,
           opensAt: businesses.opensAt, closesAt: businesses.closesAt, deliveryRadiusKm: businesses.deliveryRadiusKm,
           rating: businesses.rating, ratingCount: businesses.ratingCount,
           minOrder: businesses.minOrder, deliveryFee: businesses.deliveryFee, feePerKm: businesses.feePerKm,
@@ -133,6 +134,9 @@ export const adminRouter = createRouter({
       if (!biz) throw new TRPCError({ code: "NOT_FOUND", message: "Comercio no encontrado" });
       if (input.decision === "rejected" && !input.note) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Indica el motivo del rechazo" });
+      }
+      if (input.decision === "approved" && !biz.locationConfirmed) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "El comercio aún no marcó su ubicación real en el mapa. No se puede aprobar." });
       }
       await db.update(businesses).set({
         approvalStatus: input.decision,

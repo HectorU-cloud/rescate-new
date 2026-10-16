@@ -3,7 +3,7 @@ import { and, desc, eq, gt } from "drizzle-orm";
 import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { businesses, products, rescuePacks } from "@db/schema";
-import { isBusinessOpenNow, isPackReservable } from "./lib/business-rules";
+import { isBusinessOpenNow, isBusinessPublic, isPackReservable } from "./lib/business-rules";
 
 const withReservable = <T extends { pickupStart: string; pickupEnd: string }>(p: T) => ({ ...p, reservable: isPackReservable(p.pickupStart, p.pickupEnd) });
 
@@ -23,7 +23,7 @@ export const catalogRouter = createRouter({
     .query(async ({ input }) => {
       const db = getDb();
       // Solo comercios aprobados por el equipo son visibles al público.
-      const rows = await db.select().from(businesses).where(eq(businesses.approvalStatus, "approved")).orderBy(desc(businesses.rating));
+      const rows = await db.select().from(businesses).where(and(eq(businesses.approvalStatus, "approved"), eq(businesses.locationConfirmed, true))).orderBy(desc(businesses.rating));
       let out = rows;
       if (input?.category) {
         out = out.filter((b) => b.category === input.category);
@@ -52,7 +52,7 @@ export const catalogRouter = createRouter({
       if (!business) return null;
       // Un comercio sin aprobar solo lo ven su dueño y los administradores.
       const canSeeUnapproved = ctx.user && (ctx.user.id === business.ownerId || ctx.user.role === "admin");
-      if (business.approvalStatus !== "approved" && !canSeeUnapproved) return null;
+      if (!isBusinessPublic(business) && !canSeeUnapproved) return null;
       const prods = await db
         .select()
         .from(products)
@@ -82,6 +82,6 @@ export const catalogRouter = createRouter({
     const byId = new Map(bizRows.map((b) => [b.id, b]));
     return packs
       .map((p) => ({ pack: withReservable(p), business: byId.get(p.businessId) ?? null }))
-      .filter((r) => r.business !== null && r.business.approvalStatus === "approved");
+      .filter((r) => r.business !== null && isBusinessPublic(r.business));
   }),
 });
