@@ -403,20 +403,21 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       const customer = await mkUser("customer");
       const biz = await mkBusiness((await mkUser("business")).id);
       const courier = await mkUser("courier");
+      const email = `carlos-${Math.random().toString(36).slice(2, 10)}@test.com`; // el correo es único por usuario
       await db.update(S.users).set({
-        name: "Carlos Andrés Pérez", email: "carlos@test.com", phone: "0991234567",
+        name: "Carlos Andrés Pérez", email, phone: "0991234567",
         courierVehicle: "Moto Honda 150", courierPlate: "gab-1234", courierPhotoUrl: "https://example.com/c.jpg",
       }).where(eq(S.users.id, courier.id));
       const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status, courierId: withCourier ? courier.id : null });
-      return { customer, courier, orderId };
+      return { customer, courier, orderId, email };
     }
 
     it("mientras va en camino el cliente ve nombre, vehículo y placa, pero ningún dato de contacto", async () => {
-      const { customer, orderId } = await setupCourierOrder("picked_up");
+      const { customer, orderId, email } = await setupCourierOrder("picked_up");
       const res = await callerFor(customer).orders.byId({ id: orderId });
       expect(res!.courier).toEqual({ name: "Carlos", photoUrl: "https://example.com/c.jpg", vehicle: "Moto Honda 150", plate: "GAB-1234", rating: null, ratingCount: 0 });
       const raw = JSON.stringify(res);
-      expect(raw).not.toContain("carlos@test.com");
+      expect(raw).not.toContain(email);
       expect(raw).not.toContain("0991234567");
       expect(raw).not.toContain("Pérez");
     });

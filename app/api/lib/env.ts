@@ -10,6 +10,11 @@ function required(name: string): string {
 
 const isProduction = process.env.NODE_ENV === "production";
 
+// Cuántos proxies de confianza hay delante de la app (para saber la IP real de cada cliente).
+// Por defecto 1 en producción (Render, Railway, Fly… ponen uno) y 0 en local.
+const rawHops = process.env.TRUSTED_PROXY_HOPS;
+const trustedProxyHops = rawHops !== undefined && rawHops !== "" ? Math.max(0, Number.parseInt(rawHops, 10) || 0) : isProduction ? 1 : 0;
+
 export const env = {
   appSecret: required("APP_SECRET"),
   isProduction,
@@ -24,6 +29,7 @@ export const env = {
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
   // Login falso solo para desarrollo. Nunca activo en producción.
   devLogin: process.env.DEV_LOGIN === "true" && !isProduction,
+  trustedProxyHops,
   resendApiKey: process.env.RESEND_API_KEY ?? "",
   authEmailFrom: process.env.AUTH_EMAIL_FROM ?? "Al Rescate <noreply@example.com>",
   // Almacenamiento compatible con S3 (AWS S3 o Cloudflare R2).
@@ -39,4 +45,11 @@ if (!env.appSecret || (isProduction && env.appSecret.length < 32)) {
   throw new Error(
     "APP_SECRET es obligatorio (en producción, mínimo 32 caracteres).",
   );
+}
+
+if (isProduction && !env.resendApiKey) {
+  console.warn("[auth] RESEND_API_KEY no está configurado: el registro y la recuperación de contraseña por correo no enviarán mensajes.");
+}
+if (isProduction && env.resendApiKey && /@example\.com>?\s*$/.test(env.authEmailFrom)) {
+  console.warn("[auth] AUTH_EMAIL_FROM sigue con el valor de ejemplo: Resend rechazará los correos. Usa un remitente de tu dominio verificado.");
 }

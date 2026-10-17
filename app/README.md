@@ -53,3 +53,33 @@ En producción `APP_SECRET`, `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_
 - GPS de repartidor: consulta `GPS_EN_VIVO.md`.
 - Fotografías, edición de productos y almacenamiento S3/R2: consulta `IMAGENES_Y_EDICION.md`.
 - Notificaciones push web con Firebase Cloud Messaging: consulta `NOTIFICACIONES_PUSH.md`.
+
+## Actualizar una base de datos que ya tiene usuarios (correo único)
+
+El correo de `users` ahora es único. Si la tabla ya tiene datos, `drizzle-kit push` pregunta
+**«¿Quieres truncar la tabla users?»**: responde **NO** (sí borraría todos los usuarios). Para que no pregunte, haz esto en orden:
+
+```sql
+-- 1) ¿hay correos repetidos? (por ejemplo, entraste con Google y con correo usando la misma dirección)
+SELECT email, COUNT(*) AS cuentas, GROUP_CONCAT(id ORDER BY id) AS ids
+FROM users WHERE email IS NOT NULL GROUP BY email HAVING COUNT(*) > 1;
+
+-- 2) si los hay, decide cuál cuenta conservar. Esto conserva la más antigua y renombra las demás (no borra nada):
+UPDATE users u
+JOIN (SELECT email, MIN(id) AS keep_id FROM users WHERE email IS NOT NULL GROUP BY email HAVING COUNT(*) > 1) d
+  ON u.email = d.email AND u.id <> d.keep_id
+SET u.email = CONCAT('duplicado-', u.id, '+', u.email);
+
+-- 3) crea el índice único a mano
+ALTER TABLE users ADD UNIQUE INDEX users_email_unique (email);
+```
+
+Después ejecuta `npm run db:push`: solo agrega la columna `sessionVersion` y no hace preguntas.
+En una base vacía (instalación nueva) no hace falta nada de esto.
+
+## Cuentas con correo: cómo funciona
+
+- Registrarse responde **lo mismo** exista o no el correo (no se puede averiguar quién tiene cuenta). Si ya tenía cuenta, le llega un aviso por correo.
+- «Reenviar correo de verificación» genera un enlace nuevo y anula el anterior. Recuperar la contraseña también verifica el correo.
+- Cambiar la contraseña, o «Cerrar sesión en todos los dispositivos» (Perfil), invalida todas las sesiones abiertas.
+- Límites de intentos de inicio de sesión: por IP y por correo. En producción define `TRUSTED_PROXY_HOPS` (cuántos proxies hay delante) para que la IP no se pueda falsificar.

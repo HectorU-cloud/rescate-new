@@ -18,9 +18,12 @@ export const users = mysqlTable("users", {
   id: serial("id").primaryKey(),
   unionId: varchar("unionId", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }),
-  email: varchar("email", { length: 320 }),
+  // Único: dos cuentas con el mismo correo hacían ambiguo el inicio de sesión y la recuperación
+  email: varchar("email", { length: 320 }).unique(),
   passwordHash: varchar("passwordHash", { length: 255 }),
   emailVerifiedAt: timestamp("emailVerifiedAt"),
+  // Sube al cambiar la contraseña o al cerrar sesión en todos los dispositivos; invalida las sesiones anteriores
+  sessionVersion: int("sessionVersion").default(0).notNull(),
   avatar: text("avatar"),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
   // Rol dentro de la app de delivery: cliente, comercio o repartidor

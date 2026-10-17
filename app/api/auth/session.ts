@@ -3,7 +3,8 @@ import { env } from "../lib/env";
 
 const JWT_ALG = "HS256";
 
-export type SessionPayload = { unionId: string };
+// sv = versión de sesión del usuario: al subir (cambio de contraseña, "cerrar todas las sesiones") las anteriores dejan de valer
+export type SessionPayload = { unionId: string; sv?: number };
 
 export async function signSessionToken(
   payload: SessionPayload,
@@ -25,9 +26,9 @@ export async function verifySessionToken(
     const { payload } = await jose.jwtVerify(token, secret, {
       algorithms: [JWT_ALG],
     });
-    const { unionId } = payload;
+    const { unionId, sv } = payload;
     if (typeof unionId !== "string" || !unionId) return null;
-    return { unionId };
+    return { unionId, sv: typeof sv === "number" ? sv : 0 }; // sesiones anteriores a este cambio no traen sv
   } catch {
     return null;
   }

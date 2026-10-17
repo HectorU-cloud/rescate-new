@@ -6,7 +6,7 @@ import { Paths, Session } from "@contracts/constants";
 import { env } from "../lib/env";
 import { getSessionCookieOptions } from "../lib/cookies";
 import { signSessionToken } from "./session";
-import { upsertUser } from "../queries/users";
+import { linkGoogleUser } from "./google-link";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -96,16 +96,14 @@ export function googleCallbackHandler() {
         return fail("email");
       }
 
-      const unionId = `google:${sub}`;
-      await upsertUser({
-        unionId,
-        name: typeof payload.name === "string" ? payload.name : email,
+      const user = await linkGoogleUser({
+        sub,
         email,
-        avatar: typeof payload.picture === "string" ? payload.picture : null,
-        lastSignInAt: new Date(),
+        name: typeof payload.name === "string" ? payload.name : email,
+        picture: typeof payload.picture === "string" ? payload.picture : null,
       });
 
-      const token = await signSessionToken({ unionId });
+      const token = await signSessionToken({ unionId: user.unionId, sv: user.sessionVersion });
       setCookie(c, Session.cookieName, token, {
         ...getSessionCookieOptions(c.req.raw.headers),
         maxAge: Session.maxAgeMs / 1000,

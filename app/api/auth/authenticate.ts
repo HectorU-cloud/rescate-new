@@ -14,5 +14,6 @@ export async function authenticateRequest(headers: Headers) {
 
   const user = await findUserByUnionId(claim.unionId);
   if (!user) throw Errors.forbidden("User not found. Please re-login.");
+  if ((claim.sv ?? 0) !== user.sessionVersion) throw Errors.forbidden("Session expired. Please re-login.");
   return user;
 }

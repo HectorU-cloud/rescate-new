@@ -59,6 +59,14 @@ export default function Profile() {
   const pushStatus = trpc.push.status.useQuery(undefined, { enabled: isAuthenticated, retry: false });
   const registerPush = trpc.push.register.useMutation({ onError: (e) => toast.error(e.message) });
   const unregisterPush = trpc.push.unregister.useMutation({ onError: (e) => toast.error(e.message) });
+  const logoutEverywhere = trpc.auth.logoutEverywhere.useMutation({
+    onSuccess: () => {
+      localStorage.removeItem("rescate-push-token");
+      localStorage.removeItem("rescate-push-enabled");
+      window.location.href = "/login";
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const firebaseConfig = getFirebaseWebConfig();
   const vapidKey = getFirebaseVapidKey();
   const firebaseWebConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId && vapidKey);
@@ -236,6 +244,15 @@ export default function Profile() {
         className="w-full rounded-2xl bg-card py-3.5 text-sm font-extrabold text-destructive ring-1 ring-border"
       >
         Cerrar sesión
+      </button>
+      <button
+        disabled={logoutEverywhere.isPending}
+        onClick={() => {
+          if (window.confirm("Se cerrará tu sesión en todos tus dispositivos (también en este). ¿Continuar?")) logoutEverywhere.mutate();
+        }}
+        className="w-full rounded-2xl bg-card py-3 text-xs font-bold text-muted-foreground ring-1 ring-border disabled:opacity-50"
+      >
+        Cerrar sesión en todos los dispositivos
       </button>
     </div>
   );

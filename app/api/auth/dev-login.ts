@@ -4,7 +4,7 @@ import { Session } from "@contracts/constants";
 import { env } from "../lib/env";
 import { getSessionCookieOptions } from "../lib/cookies";
 import { signSessionToken } from "./session";
-import { upsertUser } from "../queries/users";
+import { findUserByUnionId, upsertUser } from "../queries/users";
 
 /**
  * Login falso para trabajar en local sin credenciales de Google.
@@ -22,7 +22,8 @@ export function devLoginHandler() {
       email: `${unionId}@local.dev`,
       lastSignInAt: new Date(),
     });
-    const token = await signSessionToken({ unionId });
+    const user = await findUserByUnionId(unionId);
+    const token = await signSessionToken({ unionId, sv: user?.sessionVersion ?? 0 });
     setCookie(c, Session.cookieName, token, {
       ...getSessionCookieOptions(c.req.raw.headers),
       maxAge: Session.maxAgeMs / 1000,

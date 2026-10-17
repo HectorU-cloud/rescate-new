@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import * as schema from "@db/schema";
 import type { InsertUser } from "@db/schema";
 import { getDb } from "./connection";
@@ -9,6 +9,16 @@ export async function findUserByUnionId(unionId: string) {
     .select()
     .from(schema.users)
     .where(eq(schema.users.unionId, unionId))
+    .limit(1);
+  return rows.at(0);
+}
+
+export async function findUserByEmail(email: string) {
+  const rows = await getDb()
+    .select()
+    .from(schema.users)
+    .where(eq(schema.users.email, email.trim().toLowerCase()))
+    .orderBy(asc(schema.users.id)) // determinista aunque una base antigua tenga correos repetidos
     .limit(1);
   return rows.at(0);
 }
