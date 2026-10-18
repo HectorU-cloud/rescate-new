@@ -6,7 +6,7 @@ import { LOGIN_PATH } from "@/const";
 import { money, timeAgo } from "@/lib/format";
 import { toast } from "sonner";
 import type { inferRouterOutputs } from "@trpc/server";
-import type { AppRouter } from "../../api/router";
+import type { AppRouter } from "../../server/router";
 
 type Overview = inferRouterOutputs<AppRouter>["admin"]["overview"];
 

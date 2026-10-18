@@ -2,8 +2,9 @@
  * Datos demo de "Al Rescate" en Milagro, Ecuador.
  * Ejecutar con: npx tsx db/seed.ts
  */
+import { computePackExpiry } from "@contracts/packs";
 import "dotenv/config";
-import { getDb } from "../api/queries/connection";
+import { getDb } from "../server/queries/connection";
 import {
   businesses,
   orderItems,
@@ -204,6 +205,7 @@ async function main() {
       description: "Pan surtido del día: ambato, queso y dulces. Alrededor de 12 piezas.",
       originalPrice: 6.0, rescuePrice: 2.5, quantityTotal: 8, quantityLeft: 8,
       pickupStart: "19:00", pickupEnd: "20:30",
+      expiresAt: computePackExpiry("19:00", "20:30"),
     },
     {
       businessId: bizIds["Cafetería Aroma y Café"],
@@ -211,6 +213,7 @@ async function main() {
       description: "Humitas y empanadas del día + una bebida caliente.",
       originalPrice: 8.0, rescuePrice: 3.0, quantityTotal: 5, quantityLeft: 5,
       pickupStart: "18:30", pickupEnd: "20:00",
+      expiresAt: computePackExpiry("18:30", "20:00"),
     },
     {
       businessId: bizIds["Jugos y Batidos El Maná"],
@@ -218,6 +221,7 @@ async function main() {
       description: "2 batidos grandes de las frutas que quedaron del día.",
       originalPrice: 5.0, rescuePrice: 2.0, quantityTotal: 4, quantityLeft: 4,
       pickupStart: "20:00", pickupEnd: "21:00",
+      expiresAt: computePackExpiry("20:00", "21:00"),
     },
     {
       businessId: bizIds["Pollos Asados El Campeón"],
@@ -225,6 +229,7 @@ async function main() {
       description: "Piezas de pollo y papas que quedaron listas al cierre.",
       originalPrice: 9.0, rescuePrice: 3.5, quantityTotal: 6, quantityLeft: 6,
       pickupStart: "21:00", pickupEnd: "22:00",
+      expiresAt: computePackExpiry("21:00", "22:00"),
     },
   ]);
 

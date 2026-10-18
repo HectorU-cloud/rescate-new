@@ -30,6 +30,8 @@ export const env = {
   // Login falso solo para desarrollo. Nunca activo en producción.
   devLogin: process.env.DEV_LOGIN === "true" && !isProduction,
   trustedProxyHops,
+  // Registra en el log las primeras peticiones con la cabecera X-Forwarded-For y la IP detectada (para fijar TRUSTED_PROXY_HOPS)
+  debugClientIp: process.env.DEBUG_CLIENT_IP === "true",
   resendApiKey: process.env.RESEND_API_KEY ?? "",
   authEmailFrom: process.env.AUTH_EMAIL_FROM ?? "Al Rescate <noreply@example.com>",
   // Almacenamiento compatible con S3 (AWS S3 o Cloudflare R2).

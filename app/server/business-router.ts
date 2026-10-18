@@ -5,6 +5,7 @@ import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
 import { BUSINESS_RULES } from "@contracts/constants";
+import { computePackExpiry, isPackExpired } from "@contracts/packs";
 import { distanceMeters, isInServiceArea } from "@contracts/geo";
 import { codesMatch } from "./lib/codes";
 import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
@@ -395,11 +396,13 @@ export const businessRouter = createRouter({
   // --- Packs de rescate ---
   rescuePacks: authedQuery.query(async ({ ctx }) => {
     const biz = await requireMyBusiness(ctx.user.id);
-    return getDb()
+    const rows = await getDb()
       .select()
       .from(rescuePacks)
       .where(eq(rescuePacks.businessId, biz.id))
       .orderBy(desc(rescuePacks.createdAt));
+    const now = new Date();
+    return rows.map((p) => ({ ...p, expired: isPackExpired(p.expiresAt, now) }));
   }),
 
   createRescuePack: authedQuery
@@ -439,22 +442,45 @@ export const businessRouter = createRouter({
           quantityLeft: input.quantityTotal,
           pickupStart: input.pickupStart,
           pickupEnd: input.pickupEnd,
+          expiresAt: computePackExpiry(input.pickupStart, input.pickupEnd),
         })
         .$returningId();
       return { id };
     }),
 
   toggleRescuePack: authedQuery
-    .input(z.object({ id: z.number(), isActive: z.boolean() }))
+    .input(z.object({ id: z.number().int().positive(), isActive: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
-      await getDb()
-        .update(rescuePacks)
-        .set({ isActive: input.isActive })
-        .where(
-          and(eq(rescuePacks.id, input.id), eq(rescuePacks.businessId, biz.id)),
-        );
+      const db = getDb();
+      const pack = await db.query.rescuePacks.findFirst({
+        where: and(eq(rescuePacks.id, input.id), eq(rescuePacks.businessId, biz.id)),
+      });
+      if (!pack) throw new TRPCError({ code: "NOT_FOUND", message: "Pack no encontrado" });
+      if (input.isActive && isPackExpired(pack.expiresAt)) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Este pack venció. Usa «Republicar» para publicarlo de nuevo." });
+      }
+      await db.update(rescuePacks).set({ isActive: input.isActive }).where(eq(rescuePacks.id, pack.id));
       return { ok: true };
+    }),
+
+  // Vuelve a publicar un pack (por ejemplo el de todos los días): nuevo vencimiento y stock repuesto.
+  republishRescuePack: authedQuery
+    .input(z.object({ id: z.number().int().positive(), quantity: z.number().int().min(1).max(100).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      const db = getDb();
+      const pack = await db.query.rescuePacks.findFirst({
+        where: and(eq(rescuePacks.id, input.id), eq(rescuePacks.businessId, biz.id)),
+      });
+      if (!pack) throw new TRPCError({ code: "NOT_FOUND", message: "Pack no encontrado" });
+      const quantity = input.quantity ?? pack.quantityTotal;
+      const expiresAt = computePackExpiry(pack.pickupStart, pack.pickupEnd);
+      await db
+        .update(rescuePacks)
+        .set({ expiresAt, quantityTotal: quantity, quantityLeft: quantity, isActive: true })
+        .where(eq(rescuePacks.id, pack.id));
+      return { ok: true, expiresAt };
     }),
 
   // Reseñas visibles únicamente para el dueño del comercio autenticado.

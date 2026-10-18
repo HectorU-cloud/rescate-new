@@ -1,10 +1,12 @@
 import { z } from "zod";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
 import { randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
+import { assertCustomerCanOrder } from "./lib/order-limits";
+import { isPackExpired } from "@contracts/packs";
 import { notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
 import { isBusinessOpenNow, isBusinessPublic, isPackReservable, quoteDelivery } from "./lib/business-rules";
 import { logOrderEvent } from "./lib/order-events";
@@ -115,6 +117,7 @@ export const ordersRouter = createRouter({
       const total = subtotal + deliveryFee;
 
       const orderId = await db.transaction(async (tx) => {
+        await assertCustomerCanOrder(tx, ctx.user.id);
         const [{ id }] = await tx
           .insert(orders)
           .values({
@@ -171,6 +174,9 @@ export const ordersRouter = createRouter({
       if (!packBusiness || !isBusinessPublic(packBusiness)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pack ya no está disponible" });
       }
+      if (isPackExpired(pack.expiresAt)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Este pack ya venció" });
+      }
       if (!isPackReservable(pack.pickupStart, pack.pickupEnd)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -181,6 +187,7 @@ export const ordersRouter = createRouter({
       const total = pack.rescuePrice * input.quantity;
 
       const orderId = await db.transaction(async (tx) => {
+        await assertCustomerCanOrder(tx, ctx.user.id);
         // Descuento atómico: solo resta si todavía queda stock suficiente.
         // Evita que dos clientes a la vez se lleven el mismo último pack.
         const [stock] = await tx
@@ -191,6 +198,7 @@ export const ordersRouter = createRouter({
               eq(rescuePacks.id, pack.id),
               eq(rescuePacks.isActive, true),
               gte(rescuePacks.quantityLeft, input.quantity),
+              gt(rescuePacks.expiresAt, new Date()), // también al momento de descontar, no solo antes
             ),
           );
         if (stock.affectedRows === 0) {

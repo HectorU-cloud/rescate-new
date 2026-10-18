@@ -225,7 +225,7 @@ describe.skipIf(!enabled)("seguridad y ubicación (MySQL real)", () => {
     const owner = await mkUser("business");
     const biz = await mkBusiness(owner.id, { approvalStatus: "rejected" });
     const [{ id: packId }] = await db.insert(S.rescuePacks).values({
-      businessId: biz, title: `${tag} pack`, originalPrice: 10, rescuePrice: 4, quantityTotal: 3, quantityLeft: 3, pickupStart: "00:00", pickupEnd: "00:00",
+      businessId: biz, title: `${tag} pack`, originalPrice: 10, rescuePrice: 4, quantityTotal: 3, quantityLeft: 3, pickupStart: "00:00", pickupEnd: "00:00", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     }).$returningId();
     try {
       const e = await failure(callerFor(await mkUser("customer")).orders.createRescue({ rescuePackId: packId, quantity: 1 }));

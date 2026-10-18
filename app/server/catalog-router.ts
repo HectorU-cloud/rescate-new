@@ -4,8 +4,13 @@ import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { businesses, products, rescuePacks } from "@db/schema";
 import { isBusinessOpenNow, isBusinessPublic, isPackReservable } from "./lib/business-rules";
+import { isPackExpired } from "@contracts/packs";
 
-const withReservable = <T extends { pickupStart: string; pickupEnd: string }>(p: T) => ({ ...p, reservable: isPackReservable(p.pickupStart, p.pickupEnd) });
+// Reservable = no venció (fecha) y estamos dentro de su ventana horaria diaria.
+const withReservable = <T extends { pickupStart: string; pickupEnd: string; expiresAt: Date | null }>(p: T) => ({
+  ...p,
+  reservable: !isPackExpired(p.expiresAt) && isPackReservable(p.pickupStart, p.pickupEnd),
+});
 
 const withOpenNow = <T extends { isOpen: boolean; opensAt: string; closesAt: string }>(b: T) => ({ ...b, openNow: isBusinessOpenNow(b) });
 
@@ -65,6 +70,7 @@ export const catalogRouter = createRouter({
             eq(rescuePacks.businessId, input.id),
             eq(rescuePacks.isActive, true),
             gt(rescuePacks.quantityLeft, 0),
+            gt(rescuePacks.expiresAt, new Date()), // los vencidos (o sin fecha) no se muestran
           ),
         );
       return { business: withOpenNow(business), products: prods, rescuePacks: packs.map(withReservable) };
@@ -76,7 +82,7 @@ export const catalogRouter = createRouter({
     const packs = await db
       .select()
       .from(rescuePacks)
-      .where(and(eq(rescuePacks.isActive, true), gt(rescuePacks.quantityLeft, 0)))
+      .where(and(eq(rescuePacks.isActive, true), gt(rescuePacks.quantityLeft, 0), gt(rescuePacks.expiresAt, new Date())))
       .orderBy(desc(rescuePacks.createdAt));
     const bizRows = await db.select().from(businesses);
     const byId = new Map(bizRows.map((b) => [b.id, b]));

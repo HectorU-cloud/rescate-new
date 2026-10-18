@@ -168,6 +168,8 @@ export const rescuePacks = mysqlTable(
     quantityLeft: int("quantityLeft").notNull(),
     pickupStart: varchar("pickupStart", { length: 5 }).notNull(), // "19:00"
     pickupEnd: varchar("pickupEnd", { length: 5 }).notNull(), // "20:30"
+    // Cuándo deja de poder reservarse (la próxima vez que llega pickupEnd). Sin fecha = vencido.
+    expiresAt: timestamp("expiresAt"),
     isActive: boolean("isActive").default(true).notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },

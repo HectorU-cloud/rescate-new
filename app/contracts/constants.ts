@@ -134,4 +134,8 @@ export const BUSINESS_RULES = {
   serviceAreaRadiusKm: 40,
   // Si un local ya confirmado mueve su pin más de estos metros, vuelve a revisión del admin.
   locationReviewMeters: 300,
+  // Límites por cliente (evitan saturar a los locales y acaparar packs).
+  maxActiveOrders: 5,
+  maxPendingOrders: 3,
+  maxOrdersPerHour: 12,
 } as const;

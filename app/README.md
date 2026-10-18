@@ -82,4 +82,4 @@ En una base vacía (instalación nueva) no hace falta nada de esto.
 - Registrarse responde **lo mismo** exista o no el correo (no se puede averiguar quién tiene cuenta). Si ya tenía cuenta, le llega un aviso por correo.
 - «Reenviar correo de verificación» genera un enlace nuevo y anula el anterior. Recuperar la contraseña también verifica el correo.
 - Cambiar la contraseña, o «Cerrar sesión en todos los dispositivos» (Perfil), invalida todas las sesiones abiertas.
-- Límites de intentos de inicio de sesión: por IP y por correo. En producción define `TRUSTED_PROXY_HOPS` (cuántos proxies hay delante) para que la IP no se pueda falsificar.
+- Límites de intentos de inicio de sesión: por IP y por correo. En producción define `TRUSTED_PROXY_HOPS` (cuántos proxies hay delante) para que la IP no se pueda falsificar. Con Vercel reenviando `/api` a Railway suele ser **2**; compruébalo con `DEBUG_CLIENT_IP=true` (ver `.env.example`): si el valor es incorrecto, todos los usuarios comparten el mismo límite de intentos.

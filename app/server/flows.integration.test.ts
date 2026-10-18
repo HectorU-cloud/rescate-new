@@ -92,6 +92,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       .values({
         businessId, title: `${tag} pack`, originalPrice: 10, rescuePrice: 4,
         quantityTotal: quantity, quantityLeft: quantity, pickupStart: "00:00", pickupEnd: "00:00",
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       })
       .$returningId();
     created.packs.push(id);

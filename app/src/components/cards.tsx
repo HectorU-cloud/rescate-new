@@ -1,6 +1,7 @@
 import { Link } from "react-router";
 import type { Business, RescuePack } from "@db/schema";
 import { money } from "@/lib/format";
+import { packDayLabel } from "@contracts/packs";
 import { CATEGORY_LABELS } from "@/lib/format";
 
 export function BusinessCard({ business }: { business: Business & { openNow: boolean } }) {
@@ -64,7 +65,7 @@ export function RescueCard({
           </span>
         </div>
         <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-          {business?.name} · retiro {pack.pickupStart}–{pack.pickupEnd}
+          {business?.name} · retiro {packDayLabel(pack.pickupStart, pack.pickupEnd, pack.expiresAt)} {pack.pickupStart}–{pack.pickupEnd}
         </p>
         <div className="mt-2 flex items-center justify-between">
           <div className="flex items-baseline gap-1.5">

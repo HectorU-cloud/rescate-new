@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { CATEGORY_LABELS, money } from "@/lib/format";
 import { toast } from "sonner";
+import { packDayLabel } from "@contracts/packs";
 
 export default function BusinessDetail() {
   const { id } = useParams<{ id: string }>();
@@ -196,7 +197,7 @@ export default function BusinessDetail() {
                 className="overflow-hidden rounded-3xl bg-card shadow-sm ring-1 ring-border"
               >
                 <div className="bg-rescue-soft px-4 py-2 text-[11px] font-extrabold uppercase tracking-wide text-rescue-dark">
-                  Quedan {pack.quantityLeft} · retiro hoy {pack.pickupStart}–
+                  Quedan {pack.quantityLeft} · retiro {packDayLabel(pack.pickupStart, pack.pickupEnd, pack.expiresAt)} {pack.pickupStart}–
                   {pack.pickupEnd}
                 </div>
                 {pack.imageUrl && <img src={pack.imageUrl} alt={pack.title} loading="lazy" className="h-44 w-full object-cover" />}

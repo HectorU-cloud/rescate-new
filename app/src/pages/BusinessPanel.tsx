@@ -9,6 +9,7 @@ import { money, timeAgo, withinMinutes } from "@/lib/format";
 import { ClaimBox } from "@/components/ClaimBox";
 import { LocationPicker, type Point } from "@/components/LocationPicker";
 import { isInServiceArea } from "@contracts/geo";
+import { computePackExpiry, describePackExpiry } from "@contracts/packs";
 import {
   BUSINESS_CATEGORIES,
   BUSINESS_RULES,
@@ -892,6 +893,15 @@ function RescueTab() {
       utils.business.rescuePacks.invalidate();
       utils.catalog.invalidate();
     },
+    onError: (e) => toast.error(e.message),
+  });
+  const republish = trpc.business.republishRescuePack.useMutation({
+    onSuccess: (r) => {
+      utils.business.rescuePacks.invalidate();
+      utils.catalog.invalidate();
+      toast.success(`Pack publicado de nuevo: vence ${describePackExpiry(r.expiresAt)}`);
+    },
+    onError: (e) => toast.error(e.message),
   });
 
   return (
@@ -978,6 +988,11 @@ function RescueTab() {
             />
           </label>
         </div>
+        {/^\d{2}:\d{2}$/.test(form.pickupStart) && /^\d{2}:\d{2}$/.test(form.pickupEnd) && (
+          <p className="text-[11px] font-bold text-rescue-dark">
+            ⏳ Este pack se podrá reservar hasta {describePackExpiry(computePackExpiry(form.pickupStart, form.pickupEnd))}. Después vence y tendrás que republicarlo.
+          </p>
+        )}
         <button
           disabled={
             add.isPending || imageBusy ||
@@ -1015,17 +1030,30 @@ function RescueTab() {
               {money(p.rescuePrice)} · quedan {p.quantityLeft}/{p.quantityTotal} ·{" "}
               {p.pickupStart}–{p.pickupEnd}
             </p>
+            <p className={`text-[11px] font-bold ${p.expired ? "text-destructive" : "text-muted-foreground"}`}>
+              {p.expired ? "⏳ Venció: publícalo de nuevo para que vuelva a verse" : `⏳ Vence ${describePackExpiry(p.expiresAt)}`}
+            </p>
           </div>
-          <button
-            onClick={() => toggle.mutate({ id: p.id, isActive: !p.isActive })}
-            className={`rounded-full px-3 py-1.5 text-[11px] font-extrabold ${
-              p.isActive
-                ? "bg-rescue-soft text-rescue-dark"
-                : "bg-secondary text-muted-foreground"
-            }`}
-          >
-            {p.isActive ? "Activo" : "Pausado"}
-          </button>
+          {p.expired ? (
+            <button
+              disabled={republish.isPending}
+              onClick={() => republish.mutate({ id: p.id })}
+              className="rounded-full bg-rescue px-3 py-1.5 text-[11px] font-extrabold text-white disabled:opacity-50"
+            >
+              Republicar
+            </button>
+          ) : (
+            <button
+              onClick={() => toggle.mutate({ id: p.id, isActive: !p.isActive })}
+              className={`rounded-full px-3 py-1.5 text-[11px] font-extrabold ${
+                p.isActive
+                  ? "bg-rescue-soft text-rescue-dark"
+                  : "bg-secondary text-muted-foreground"
+              }`}
+            >
+              {p.isActive ? "Activo" : "Pausado"}
+            </button>
+          )}
         </div>
       ))}
     </div>

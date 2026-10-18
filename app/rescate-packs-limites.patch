@@ -1,0 +1,975 @@
+diff --git a/app/.env.example b/app/.env.example
+index a9313f1..c7475c4 100644
+--- a/app/.env.example
++++ b/app/.env.example
+@@ -55,3 +55,8 @@ AUTH_EMAIL_FROM=Al Rescate <noreply@tu-dominio.com>
+ # Define de dónde se lee la IP real para los límites de intentos. Por defecto: 1 en producción, 0 en local.
+ # Importante: el servidor solo debe aceptar tráfico que pase por ese proxy.
+ TRUSTED_PROXY_HOPS=
++# Si tu app está detrás de varios proxies (p. ej. Vercel que reenvía a Railway) el valor puede ser 2 o más.
++# Un valor incorrecto hace que TODOS los usuarios compartan el mismo límite de intentos.
++# Para comprobarlo: pon DEBUG_CLIENT_IP=true, abre /login desde tu casa y mira el log del servidor:
++# la "IP detectada" debe ser LA TUYA (la que muestra https://ifconfig.me). Si no, sube o baja TRUSTED_PROXY_HOPS.
++DEBUG_CLIENT_IP=
+diff --git a/app/README.md b/app/README.md
+index 9871251..4c4b44c 100644
+--- a/app/README.md
++++ b/app/README.md
+@@ -82,4 +82,4 @@ En una base vacía (instalación nueva) no hace falta nada de esto.
+ - Registrarse responde **lo mismo** exista o no el correo (no se puede averiguar quién tiene cuenta). Si ya tenía cuenta, le llega un aviso por correo.
+ - «Reenviar correo de verificación» genera un enlace nuevo y anula el anterior. Recuperar la contraseña también verifica el correo.
+ - Cambiar la contraseña, o «Cerrar sesión en todos los dispositivos» (Perfil), invalida todas las sesiones abiertas.
+-- Límites de intentos de inicio de sesión: por IP y por correo. En producción define `TRUSTED_PROXY_HOPS` (cuántos proxies hay delante) para que la IP no se pueda falsificar.
++- Límites de intentos de inicio de sesión: por IP y por correo. En producción define `TRUSTED_PROXY_HOPS` (cuántos proxies hay delante) para que la IP no se pueda falsificar. Con Vercel reenviando `/api` a Railway suele ser **2**; compruébalo con `DEBUG_CLIENT_IP=true` (ver `.env.example`): si el valor es incorrecto, todos los usuarios comparten el mismo límite de intentos.
+diff --git a/app/contracts/constants.ts b/app/contracts/constants.ts
+index 07bdc91..fe4c0ff 100644
+--- a/app/contracts/constants.ts
++++ b/app/contracts/constants.ts
+@@ -134,4 +134,8 @@ export const BUSINESS_RULES = {
+   serviceAreaRadiusKm: 40,
+   // Si un local ya confirmado mueve su pin más de estos metros, vuelve a revisión del admin.
+   locationReviewMeters: 300,
++  // Límites por cliente (evitan saturar a los locales y acaparar packs).
++  maxActiveOrders: 5,
++  maxPendingOrders: 3,
++  maxOrdersPerHour: 12,
+ } as const;
+diff --git a/app/contracts/packs.ts b/app/contracts/packs.ts
+new file mode 100644
+index 0000000..b487d3f
+--- /dev/null
++++ b/app/contracts/packs.ts
+@@ -0,0 +1,65 @@
++// Vencimiento de los packs de rescate. Compartido entre frontend y backend.
++// Ecuador continental es UTC-5 todo el año (sin horario de verano), así que un desfase fijo basta.
++
++const OFFSET_MS = -5 * 60 * 60 * 1000;
++const DAY_MS = 24 * 60 * 60 * 1000;
++const MIN_LEAD_MS = 60 * 1000;
++
++function toMinutes(hhmm: string) {
++  const m = /^(\d{2}):(\d{2})$/.exec(hhmm);
++  if (!m) throw new Error(`Hora inválida: ${hhmm}`);
++  return Number(m[1]) * 60 + Number(m[2]);
++}
++const dayIndex = (ms: number) => Math.floor((ms + OFFSET_MS) / DAY_MS);
++const pad = (n: number) => String(n).padStart(2, "0");
++
++/**
++ * Cuándo vence un pack: la próxima vez que llega la hora de fin de retiro (hora de Ecuador).
++ * Si la hora de fin ya pasó hoy (o falta menos de un minuto), vence mañana.
++ * Una ventana de 24 h (inicio = fin) vence 24 horas después de publicarla.
++ */
++export function computePackExpiry(pickupStart: string, pickupEnd: string, from = new Date()): Date {
++  const start = toMinutes(pickupStart);
++  const end = toMinutes(pickupEnd);
++  if (start === end) return new Date(from.getTime() + DAY_MS);
++  const local = new Date(from.getTime() + OFFSET_MS); // sus campos UTC muestran la hora de Ecuador
++  let candidate =
++    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), Math.floor(end / 60), end % 60) - OFFSET_MS;
++  if (candidate - from.getTime() < MIN_LEAD_MS) candidate += DAY_MS;
++  return new Date(candidate);
++}
++
++/** ¿El pack ya venció? Un pack sin fecha (publicado antes de existir el vencimiento) cuenta como vencido. */
++export function isPackExpired(expiresAt: Date | string | null | undefined, now = new Date()) {
++  return !expiresAt || new Date(expiresAt).getTime() <= now.getTime();
++}
++
++/** "hoy a las 20:30", "mañana a las 20:30", "el 17/10 a las 20:30" o "venció". */
++export function describePackExpiry(expiresAt: Date | string | null | undefined, now = new Date()): string {
++  if (isPackExpired(expiresAt, now)) return "venció";
++  const ms = new Date(expiresAt!).getTime();
++  const local = new Date(ms + OFFSET_MS);
++  const time = `${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}`;
++  const diff = dayIndex(ms) - dayIndex(now.getTime());
++  if (diff <= 0) return `hoy a las ${time}`;
++  if (diff === 1) return `mañana a las ${time}`;
++  return `el ${pad(local.getUTCDate())}/${pad(local.getUTCMonth() + 1)} a las ${time}`;
++}
++
++/** Día en que se retira el pack: "hoy", "mañana" o "dd/mm". */
++export function packDayLabel(
++  pickupStart: string,
++  pickupEnd: string,
++  expiresAt: Date | string | null | undefined,
++  now = new Date(),
++): string {
++  if (!expiresAt) return "";
++  if (toMinutes(pickupStart) === toMinutes(pickupEnd)) return "hoy"; // disponible las 24 h
++  const crossesMidnight = toMinutes(pickupEnd) < toMinutes(pickupStart);
++  const startMs = new Date(expiresAt).getTime() - (crossesMidnight ? DAY_MS : 0);
++  const diff = dayIndex(startMs) - dayIndex(now.getTime());
++  if (diff <= 0) return "hoy";
++  if (diff === 1) return "mañana";
++  const local = new Date(startMs + OFFSET_MS);
++  return `${pad(local.getUTCDate())}/${pad(local.getUTCMonth() + 1)}`;
++}
+diff --git a/app/db/schema.ts b/app/db/schema.ts
+index 8259277..e9e2bce 100644
+--- a/app/db/schema.ts
++++ b/app/db/schema.ts
+@@ -168,6 +168,8 @@ export const rescuePacks = mysqlTable(
+     quantityLeft: int("quantityLeft").notNull(),
+     pickupStart: varchar("pickupStart", { length: 5 }).notNull(), // "19:00"
+     pickupEnd: varchar("pickupEnd", { length: 5 }).notNull(), // "20:30"
++    // Cuándo deja de poder reservarse (la próxima vez que llega pickupEnd). Sin fecha = vencido.
++    expiresAt: timestamp("expiresAt"),
+     isActive: boolean("isActive").default(true).notNull(),
+     createdAt: timestamp("createdAt").defaultNow().notNull(),
+   },
+diff --git a/app/db/seed.ts b/app/db/seed.ts
+index efcbe2c..4330285 100644
+--- a/app/db/seed.ts
++++ b/app/db/seed.ts
+@@ -2,8 +2,9 @@
+  * Datos demo de "Al Rescate" en Milagro, Ecuador.
+  * Ejecutar con: npx tsx db/seed.ts
+  */
++import { computePackExpiry } from "@contracts/packs";
+ import "dotenv/config";
+-import { getDb } from "../api/queries/connection";
++import { getDb } from "../server/queries/connection";
+ import {
+   businesses,
+   orderItems,
+@@ -204,6 +205,7 @@ async function main() {
+       description: "Pan surtido del día: ambato, queso y dulces. Alrededor de 12 piezas.",
+       originalPrice: 6.0, rescuePrice: 2.5, quantityTotal: 8, quantityLeft: 8,
+       pickupStart: "19:00", pickupEnd: "20:30",
++      expiresAt: computePackExpiry("19:00", "20:30"),
+     },
+     {
+       businessId: bizIds["Cafetería Aroma y Café"],
+@@ -211,6 +213,7 @@ async function main() {
+       description: "Humitas y empanadas del día + una bebida caliente.",
+       originalPrice: 8.0, rescuePrice: 3.0, quantityTotal: 5, quantityLeft: 5,
+       pickupStart: "18:30", pickupEnd: "20:00",
++      expiresAt: computePackExpiry("18:30", "20:00"),
+     },
+     {
+       businessId: bizIds["Jugos y Batidos El Maná"],
+@@ -218,6 +221,7 @@ async function main() {
+       description: "2 batidos grandes de las frutas que quedaron del día.",
+       originalPrice: 5.0, rescuePrice: 2.0, quantityTotal: 4, quantityLeft: 4,
+       pickupStart: "20:00", pickupEnd: "21:00",
++      expiresAt: computePackExpiry("20:00", "21:00"),
+     },
+     {
+       businessId: bizIds["Pollos Asados El Campeón"],
+@@ -225,6 +229,7 @@ async function main() {
+       description: "Piezas de pollo y papas que quedaron listas al cierre.",
+       originalPrice: 9.0, rescuePrice: 3.5, quantityTotal: 6, quantityLeft: 6,
+       pickupStart: "21:00", pickupEnd: "22:00",
++      expiresAt: computePackExpiry("21:00", "22:00"),
+     },
+   ]);
+ 
+diff --git a/app/server/business-router.ts b/app/server/business-router.ts
+index 80b0c61..c91300f 100644
+--- a/app/server/business-router.ts
++++ b/app/server/business-router.ts
+@@ -5,6 +5,7 @@ import { createRouter, authedQuery } from "./middleware";
+ import { cancelOrderAndRestock } from "./lib/orders";
+ import { getDb } from "./queries/connection";
+ import { BUSINESS_RULES } from "@contracts/constants";
++import { computePackExpiry, isPackExpired } from "@contracts/packs";
+ import { distanceMeters, isInServiceArea } from "@contracts/geo";
+ import { codesMatch } from "./lib/codes";
+ import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
+@@ -395,11 +396,13 @@ export const businessRouter = createRouter({
+   // --- Packs de rescate ---
+   rescuePacks: authedQuery.query(async ({ ctx }) => {
+     const biz = await requireMyBusiness(ctx.user.id);
+-    return getDb()
++    const rows = await getDb()
+       .select()
+       .from(rescuePacks)
+       .where(eq(rescuePacks.businessId, biz.id))
+       .orderBy(desc(rescuePacks.createdAt));
++    const now = new Date();
++    return rows.map((p) => ({ ...p, expired: isPackExpired(p.expiresAt, now) }));
+   }),
+ 
+   createRescuePack: authedQuery
+@@ -439,24 +442,47 @@ export const businessRouter = createRouter({
+           quantityLeft: input.quantityTotal,
+           pickupStart: input.pickupStart,
+           pickupEnd: input.pickupEnd,
++          expiresAt: computePackExpiry(input.pickupStart, input.pickupEnd),
+         })
+         .$returningId();
+       return { id };
+     }),
+ 
+   toggleRescuePack: authedQuery
+-    .input(z.object({ id: z.number(), isActive: z.boolean() }))
++    .input(z.object({ id: z.number().int().positive(), isActive: z.boolean() }))
+     .mutation(async ({ ctx, input }) => {
+       const biz = await requireMyBusiness(ctx.user.id);
+-      await getDb()
+-        .update(rescuePacks)
+-        .set({ isActive: input.isActive })
+-        .where(
+-          and(eq(rescuePacks.id, input.id), eq(rescuePacks.businessId, biz.id)),
+-        );
++      const db = getDb();
++      const pack = await db.query.rescuePacks.findFirst({
++        where: and(eq(rescuePacks.id, input.id), eq(rescuePacks.businessId, biz.id)),
++      });
++      if (!pack) throw new TRPCError({ code: "NOT_FOUND", message: "Pack no encontrado" });
++      if (input.isActive && isPackExpired(pack.expiresAt)) {
++        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Este pack venció. Usa «Republicar» para publicarlo de nuevo." });
++      }
++      await db.update(rescuePacks).set({ isActive: input.isActive }).where(eq(rescuePacks.id, pack.id));
+       return { ok: true };
+     }),
+ 
++  // Vuelve a publicar un pack (por ejemplo el de todos los días): nuevo vencimiento y stock repuesto.
++  republishRescuePack: authedQuery
++    .input(z.object({ id: z.number().int().positive(), quantity: z.number().int().min(1).max(100).optional() }))
++    .mutation(async ({ ctx, input }) => {
++      const biz = await requireMyBusiness(ctx.user.id);
++      const db = getDb();
++      const pack = await db.query.rescuePacks.findFirst({
++        where: and(eq(rescuePacks.id, input.id), eq(rescuePacks.businessId, biz.id)),
++      });
++      if (!pack) throw new TRPCError({ code: "NOT_FOUND", message: "Pack no encontrado" });
++      const quantity = input.quantity ?? pack.quantityTotal;
++      const expiresAt = computePackExpiry(pack.pickupStart, pack.pickupEnd);
++      await db
++        .update(rescuePacks)
++        .set({ expiresAt, quantityTotal: quantity, quantityLeft: quantity, isActive: true })
++        .where(eq(rescuePacks.id, pack.id));
++      return { ok: true, expiresAt };
++    }),
++
+   // Reseñas visibles únicamente para el dueño del comercio autenticado.
+   reviews: authedQuery.query(async ({ ctx }) => {
+     const biz = await requireMyBusiness(ctx.user.id);
+diff --git a/app/server/catalog-router.ts b/app/server/catalog-router.ts
+index c882d0e..a8ae95d 100644
+--- a/app/server/catalog-router.ts
++++ b/app/server/catalog-router.ts
+@@ -4,8 +4,13 @@ import { createRouter, publicQuery } from "./middleware";
+ import { getDb } from "./queries/connection";
+ import { businesses, products, rescuePacks } from "@db/schema";
+ import { isBusinessOpenNow, isBusinessPublic, isPackReservable } from "./lib/business-rules";
++import { isPackExpired } from "@contracts/packs";
+ 
+-const withReservable = <T extends { pickupStart: string; pickupEnd: string }>(p: T) => ({ ...p, reservable: isPackReservable(p.pickupStart, p.pickupEnd) });
++// Reservable = no venció (fecha) y estamos dentro de su ventana horaria diaria.
++const withReservable = <T extends { pickupStart: string; pickupEnd: string; expiresAt: Date | null }>(p: T) => ({
++  ...p,
++  reservable: !isPackExpired(p.expiresAt) && isPackReservable(p.pickupStart, p.pickupEnd),
++});
+ 
+ const withOpenNow = <T extends { isOpen: boolean; opensAt: string; closesAt: string }>(b: T) => ({ ...b, openNow: isBusinessOpenNow(b) });
+ 
+@@ -65,6 +70,7 @@ export const catalogRouter = createRouter({
+             eq(rescuePacks.businessId, input.id),
+             eq(rescuePacks.isActive, true),
+             gt(rescuePacks.quantityLeft, 0),
++            gt(rescuePacks.expiresAt, new Date()), // los vencidos (o sin fecha) no se muestran
+           ),
+         );
+       return { business: withOpenNow(business), products: prods, rescuePacks: packs.map(withReservable) };
+@@ -76,7 +82,7 @@ export const catalogRouter = createRouter({
+     const packs = await db
+       .select()
+       .from(rescuePacks)
+-      .where(and(eq(rescuePacks.isActive, true), gt(rescuePacks.quantityLeft, 0)))
++      .where(and(eq(rescuePacks.isActive, true), gt(rescuePacks.quantityLeft, 0), gt(rescuePacks.expiresAt, new Date())))
+       .orderBy(desc(rescuePacks.createdAt));
+     const bizRows = await db.select().from(businesses);
+     const byId = new Map(bizRows.map((b) => [b.id, b]));
+diff --git a/app/server/flows.integration.test.ts b/app/server/flows.integration.test.ts
+index 1c9d988..3fefdaa 100644
+--- a/app/server/flows.integration.test.ts
++++ b/app/server/flows.integration.test.ts
+@@ -92,6 +92,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
+       .values({
+         businessId, title: `${tag} pack`, originalPrice: 10, rescuePrice: 4,
+         quantityTotal: quantity, quantityLeft: quantity, pickupStart: "00:00", pickupEnd: "00:00",
++        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+       })
+       .$returningId();
+     created.packs.push(id);
+diff --git a/app/server/lib/env.ts b/app/server/lib/env.ts
+index 48ea9f3..ced4544 100644
+--- a/app/server/lib/env.ts
++++ b/app/server/lib/env.ts
+@@ -30,6 +30,8 @@ export const env = {
+   // Login falso solo para desarrollo. Nunca activo en producción.
+   devLogin: process.env.DEV_LOGIN === "true" && !isProduction,
+   trustedProxyHops,
++  // Registra en el log las primeras peticiones con la cabecera X-Forwarded-For y la IP detectada (para fijar TRUSTED_PROXY_HOPS)
++  debugClientIp: process.env.DEBUG_CLIENT_IP === "true",
+   resendApiKey: process.env.RESEND_API_KEY ?? "",
+   authEmailFrom: process.env.AUTH_EMAIL_FROM ?? "Al Rescate <noreply@example.com>",
+   // Almacenamiento compatible con S3 (AWS S3 o Cloudflare R2).
+diff --git a/app/server/lib/order-limits.ts b/app/server/lib/order-limits.ts
+new file mode 100644
+index 0000000..47de65f
+--- /dev/null
++++ b/app/server/lib/order-limits.ts
+@@ -0,0 +1,45 @@
++import { and, count, eq, gt, inArray } from "drizzle-orm";
++import { TRPCError } from "@trpc/server";
++import { BUSINESS_RULES } from "@contracts/constants";
++import { orders, users } from "@db/schema";
++import type { getDb } from "../queries/connection";
++
++type Db = ReturnType<typeof getDb>;
++export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
++
++const IN_PROGRESS = ["pending", "accepted", "preparing", "ready", "picked_up"] as const;
++const tooMany = (message: string) => new TRPCError({ code: "TOO_MANY_REQUESTS", message });
++
++/**
++ * Límites por cliente para que nadie sature a los locales con pedidos falsos o acapare packs:
++ * pedidos en curso, pedidos esperando respuesta y pedidos por hora.
++ * Debe llamarse DENTRO de la transacción que crea el pedido: primero bloquea la fila del cliente,
++ * así dos pedidos simultáneos suyos no pueden saltarse el límite.
++ */
++export async function assertCustomerCanOrder(tx: Tx, customerId: number, now = new Date()) {
++  await tx.select({ id: users.id }).from(users).where(eq(users.id, customerId)).for("update");
++
++  const [active] = await tx
++    .select({ n: count() })
++    .from(orders)
++    .where(and(eq(orders.customerId, customerId), inArray(orders.status, IN_PROGRESS)));
++  if (active.n >= BUSINESS_RULES.maxActiveOrders) {
++    throw tooMany(`Ya tienes ${active.n} pedidos en curso. Espera a que termine alguno antes de pedir otro.`);
++  }
++
++  const [pending] = await tx
++    .select({ n: count() })
++    .from(orders)
++    .where(and(eq(orders.customerId, customerId), eq(orders.status, "pending")));
++  if (pending.n >= BUSINESS_RULES.maxPendingOrders) {
++    throw tooMany(`Tienes ${pending.n} pedidos esperando respuesta de los locales. Espera a que los acepten o cancela alguno.`);
++  }
++
++  const [lastHour] = await tx
++    .select({ n: count() })
++    .from(orders)
++    .where(and(eq(orders.customerId, customerId), gt(orders.createdAt, new Date(now.getTime() - 60 * 60 * 1000))));
++  if (lastHour.n >= BUSINESS_RULES.maxOrdersPerHour) {
++    throw tooMany("Hiciste muchos pedidos en la última hora. Inténtalo de nuevo más tarde.");
++  }
++}
+diff --git a/app/server/lib/packs.test.ts b/app/server/lib/packs.test.ts
+new file mode 100644
+index 0000000..a1789fe
+--- /dev/null
++++ b/app/server/lib/packs.test.ts
+@@ -0,0 +1,93 @@
++import { describe, expect, it } from "vitest";
++import { computePackExpiry, describePackExpiry, isPackExpired, packDayLabel } from "@contracts/packs";
++
++/** Instante a partir de una hora de pared de Ecuador (UTC-5). */
++const ec = (y: number, mo: number, d: number, h = 0, mi = 0, s = 0) => new Date(Date.UTC(y, mo - 1, d, h + 5, mi, s));
++/** Hora de pared de Ecuador de un instante, como "AAAA-MM-DD HH:MM". */
++const wall = (d: Date) => {
++  const l = new Date(d.getTime() - 5 * 3600_000);
++  const p = (n: number) => String(n).padStart(2, "0");
++  return `${l.getUTCFullYear()}-${p(l.getUTCMonth() + 1)}-${p(l.getUTCDate())} ${p(l.getUTCHours())}:${p(l.getUTCMinutes())}`;
++};
++
++describe("computePackExpiry", () => {
++  it("publicado de mañana: vence hoy a la hora de fin", () => {
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 10, 16, 10, 0)))).toBe("2026-10-16 20:30");
++  });
++  it("publicado ya pasada la hora de fin: vence mañana (antes reaparecía todos los días)", () => {
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 10, 16, 21, 0)))).toBe("2026-10-17 20:30");
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 10, 16, 20, 30)))).toBe("2026-10-17 20:30");
++  });
++  it("si faltan menos de 60 s para el fin, vence mañana; con 2 min todavía es hoy", () => {
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 10, 16, 20, 29, 30)))).toBe("2026-10-17 20:30");
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 10, 16, 20, 28)))).toBe("2026-10-16 20:30");
++  });
++  it("ventana que cruza la medianoche (22:00–01:00)", () => {
++    expect(wall(computePackExpiry("22:00", "01:00", ec(2026, 10, 16, 10, 0)))).toBe("2026-10-17 01:00");
++    expect(wall(computePackExpiry("22:00", "01:00", ec(2026, 10, 16, 23, 30)))).toBe("2026-10-17 01:00");
++    expect(wall(computePackExpiry("22:00", "01:00", ec(2026, 10, 17, 0, 10)))).toBe("2026-10-17 01:00");
++  });
++  it("ventana de 24 h (inicio = fin) vence exactamente 24 h después", () => {
++    const from = ec(2026, 10, 16, 10, 0);
++    expect(computePackExpiry("00:00", "00:00", from).getTime() - from.getTime()).toBe(24 * 3600_000);
++  });
++  it("cruza fin de mes y de año", () => {
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 12, 31, 22, 0)))).toBe("2027-01-01 20:30");
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 2, 28, 22, 0)))).toBe("2026-03-01 20:30");
++  });
++  it("usa la hora de Ecuador aunque la hora UTC ya sea otro día", () => {
++    // 21:00 en Ecuador = 02:00 UTC del día siguiente
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 10, 16, 21, 0)))).toBe("2026-10-17 20:30");
++    expect(wall(computePackExpiry("19:00", "20:30", ec(2026, 10, 16, 19, 0)))).toBe("2026-10-16 20:30");
++  });
++  it("rechaza horas con formato inválido", () => {
++    expect(() => computePackExpiry("7:00", "20:30")).toThrow();
++    expect(() => computePackExpiry("19:00", "xx")).toThrow();
++  });
++});
++
++describe("isPackExpired", () => {
++  const now = ec(2026, 10, 16, 12, 0);
++  it("vence justo en la fecha y un pack sin fecha cuenta como vencido", () => {
++    expect(isPackExpired(ec(2026, 10, 16, 12, 1), now)).toBe(false);
++    expect(isPackExpired(ec(2026, 10, 16, 12, 0), now)).toBe(true);
++    expect(isPackExpired(ec(2026, 10, 16, 11, 0), now)).toBe(true);
++    expect(isPackExpired(null, now)).toBe(true);
++    expect(isPackExpired(undefined, now)).toBe(true);
++  });
++  it("acepta fechas en texto ISO (como llegan por la red)", () => {
++    expect(isPackExpired(ec(2026, 10, 16, 13, 0).toISOString(), now)).toBe(false);
++  });
++});
++
++describe("describePackExpiry", () => {
++  const now = ec(2026, 10, 16, 12, 0);
++  it("hoy, mañana, otra fecha y vencido", () => {
++    expect(describePackExpiry(ec(2026, 10, 16, 20, 30), now)).toBe("hoy a las 20:30");
++    expect(describePackExpiry(ec(2026, 10, 17, 20, 30), now)).toBe("mañana a las 20:30");
++    expect(describePackExpiry(ec(2026, 10, 20, 8, 5), now)).toBe("el 20/10 a las 08:05");
++    expect(describePackExpiry(ec(2026, 10, 16, 11, 0), now)).toBe("venció");
++    expect(describePackExpiry(null, now)).toBe("venció");
++  });
++  it("cuenta el día en hora de Ecuador, no en UTC", () => {
++    const lateNight = ec(2026, 10, 16, 23, 0); // ya es 04:00 UTC del 17
++    expect(describePackExpiry(ec(2026, 10, 16, 23, 30), lateNight)).toBe("hoy a las 23:30");
++  });
++});
++
++describe("packDayLabel", () => {
++  const now = ec(2026, 10, 16, 12, 0);
++  it("día de retiro: hoy, mañana o fecha", () => {
++    expect(packDayLabel("19:00", "20:30", ec(2026, 10, 16, 20, 30), now)).toBe("hoy");
++    expect(packDayLabel("19:00", "20:30", ec(2026, 10, 17, 20, 30), now)).toBe("mañana");
++    expect(packDayLabel("19:00", "20:30", ec(2026, 10, 19, 20, 30), now)).toBe("19/10");
++  });
++  it("una ventana que cruza la medianoche se retira el día anterior al vencimiento", () => {
++    // 22:00–01:00, vence mañana 01:00 → se retira desde esta noche
++    expect(packDayLabel("22:00", "01:00", ec(2026, 10, 17, 1, 0), now)).toBe("hoy");
++  });
++  it("ventana de 24 h siempre es 'hoy' y sin fecha no hay etiqueta", () => {
++    expect(packDayLabel("00:00", "00:00", ec(2026, 10, 17, 12, 0), now)).toBe("hoy");
++    expect(packDayLabel("19:00", "20:30", null, now)).toBe("");
++  });
++});
+diff --git a/app/server/lib/rate-limit.ts b/app/server/lib/rate-limit.ts
+index 5e23c8b..b2d1e14 100644
+--- a/app/server/lib/rate-limit.ts
++++ b/app/server/lib/rate-limit.ts
+@@ -9,9 +9,16 @@ export { consume, clearBucket } from "./rate-bucket";
+  * Limitador por IP para endpoints sensibles. Con varias instancias conviene además un límite
+  * compartido en el proxy/CDN o con Redis. La IP del cliente sale de `clientIp` (ver TRUSTED_PROXY_HOPS).
+  */
++let sampleLogs = 0;
++
+ export function rateLimit(options: { windowMs: number; max: number; prefix: string }): MiddlewareHandler {
+   return async (c, next) => {
+-    const { allowed, retryAfterSec } = consume(`${options.prefix}:${clientIp(c, env.trustedProxyHops)}`, options.windowMs, options.max);
++    const ip = clientIp(c, env.trustedProxyHops);
++    if (env.debugClientIp && sampleLogs < 5) {
++      sampleLogs++;
++      console.info(`[ip] X-Forwarded-For="${c.req.header("x-forwarded-for") ?? ""}" → IP detectada: ${ip} (TRUSTED_PROXY_HOPS=${env.trustedProxyHops})`);
++    }
++    const { allowed, retryAfterSec } = consume(`${options.prefix}:${ip}`, options.windowMs, options.max);
+     if (!allowed) {
+       c.header("Retry-After", String(retryAfterSec));
+       return c.json({ error: "Demasiados intentos. Espera un momento y vuelve a intentarlo." }, 429);
+diff --git a/app/server/orders-router.ts b/app/server/orders-router.ts
+index af1f80d..e74da52 100644
+--- a/app/server/orders-router.ts
++++ b/app/server/orders-router.ts
+@@ -1,10 +1,12 @@
+ import { z } from "zod";
+-import { and, desc, eq, gte, sql } from "drizzle-orm";
++import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
+ import { customAlphabet } from "nanoid";
+ import { randomInt } from "node:crypto";
+ import { TRPCError } from "@trpc/server";
+ import { createRouter, authedQuery } from "./middleware";
+ import { cancelOrderAndRestock } from "./lib/orders";
++import { assertCustomerCanOrder } from "./lib/order-limits";
++import { isPackExpired } from "@contracts/packs";
+ import { notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
+ import { isBusinessOpenNow, isBusinessPublic, isPackReservable, quoteDelivery } from "./lib/business-rules";
+ import { logOrderEvent } from "./lib/order-events";
+@@ -115,6 +117,7 @@ export const ordersRouter = createRouter({
+       const total = subtotal + deliveryFee;
+ 
+       const orderId = await db.transaction(async (tx) => {
++        await assertCustomerCanOrder(tx, ctx.user.id);
+         const [{ id }] = await tx
+           .insert(orders)
+           .values({
+@@ -171,6 +174,9 @@ export const ordersRouter = createRouter({
+       if (!packBusiness || !isBusinessPublic(packBusiness)) {
+         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pack ya no está disponible" });
+       }
++      if (isPackExpired(pack.expiresAt)) {
++        throw new TRPCError({ code: "BAD_REQUEST", message: "Este pack ya venció" });
++      }
+       if (!isPackReservable(pack.pickupStart, pack.pickupEnd)) {
+         throw new TRPCError({
+           code: "BAD_REQUEST",
+@@ -181,6 +187,7 @@ export const ordersRouter = createRouter({
+       const total = pack.rescuePrice * input.quantity;
+ 
+       const orderId = await db.transaction(async (tx) => {
++        await assertCustomerCanOrder(tx, ctx.user.id);
+         // Descuento atómico: solo resta si todavía queda stock suficiente.
+         // Evita que dos clientes a la vez se lleven el mismo último pack.
+         const [stock] = await tx
+@@ -191,6 +198,7 @@ export const ordersRouter = createRouter({
+               eq(rescuePacks.id, pack.id),
+               eq(rescuePacks.isActive, true),
+               gte(rescuePacks.quantityLeft, input.quantity),
++              gt(rescuePacks.expiresAt, new Date()), // también al momento de descontar, no solo antes
+             ),
+           );
+         if (stock.affectedRows === 0) {
+diff --git a/app/server/packs-limits.integration.test.ts b/app/server/packs-limits.integration.test.ts
+new file mode 100644
+index 0000000..4554b77
+--- /dev/null
++++ b/app/server/packs-limits.integration.test.ts
+@@ -0,0 +1,273 @@
++/**
++ * Pruebas de integración (MySQL real): vencimiento de packs de rescate y límites de pedidos por cliente.
++ * Corren solo si defines TEST_DATABASE_URL (ver flows.integration.test.ts).
++ */
++import { afterAll, beforeAll, describe, expect, it } from "vitest";
++import { eq, inArray, sql } from "drizzle-orm";
++import { computePackExpiry } from "@contracts/packs";
++
++const TEST_URL = process.env.TEST_DATABASE_URL;
++const dbName = TEST_URL ? new URL(TEST_URL).pathname.replace(/^\//, "") : "";
++const enabled = !!TEST_URL && /test/i.test(dbName);
++
++describe.skipIf(!enabled)("packs con fecha y límites por cliente (MySQL real)", () => {
++  let db: ReturnType<(typeof import("./queries/connection"))["getDb"]>;
++  let S: typeof import("@db/schema");
++  let appRouter: (typeof import("./router"))["appRouter"];
++
++  const tag = `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
++  let seq = 0;
++  const created = { users: [] as number[], businesses: [] as number[], orders: [] as number[], products: [] as number[], packs: [] as number[] };
++  const HOUR = 3600_000;
++
++  beforeAll(async () => {
++    process.env.DATABASE_URL = TEST_URL!;
++    process.env.APP_SECRET ||= "test-secret-test-secret-test-secret-1234";
++    db = (await import("./queries/connection")).getDb();
++    S = await import("@db/schema");
++    appRouter = (await import("./router")).appRouter;
++  });
++
++  afterAll(async () => {
++    if (!db) return;
++    if (created.orders.length) {
++      await db.delete(S.orderItems).where(inArray(S.orderItems.orderId, created.orders));
++      await db.delete(S.orderEvents).where(inArray(S.orderEvents.orderId, created.orders));
++      await db.delete(S.orders).where(inArray(S.orders.id, created.orders));
++    }
++    if (created.packs.length) await db.delete(S.rescuePacks).where(inArray(S.rescuePacks.id, created.packs));
++    if (created.products.length) await db.delete(S.products).where(inArray(S.products.id, created.products));
++    if (created.businesses.length) await db.delete(S.businesses).where(inArray(S.businesses.id, created.businesses));
++    if (created.users.length) await db.delete(S.users).where(inArray(S.users.id, created.users));
++  });
++
++  // ------------------------------------------------------------------ ayudantes
++  type User = Awaited<ReturnType<typeof mkUser>>;
++  async function mkUser(kind: "customer" | "business") {
++    const [{ id }] = await db.insert(S.users).values({ unionId: `${tag}-u${seq++}`, name: `${tag} ${kind}`, appRole: kind }).$returningId();
++    created.users.push(id);
++    return (await db.select().from(S.users).where(eq(S.users.id, id)))[0];
++  }
++  async function mkBusiness(ownerId: number) {
++    const [{ id }] = await db.insert(S.businesses).values({
++      ownerId, name: `${tag} local ${seq++}`, category: "test", address: "Calle 1", lat: -2.134, lng: -79.594,
++      approvalStatus: "approved", locationConfirmed: true, isOpen: true, opensAt: "00:00", closesAt: "00:00",
++    }).$returningId();
++    created.businesses.push(id);
++    return id;
++  }
++  async function mkProduct(businessId: number) {
++    const [{ id }] = await db.insert(S.products).values({ businessId, name: `${tag} prod`, price: 3 }).$returningId();
++    created.products.push(id);
++    return id;
++  }
++  /** Pack con ventana de 24 h; `expiresAt` por defecto dentro de 12 horas. */
++  async function mkPack(businessId: number, over: Partial<typeof S.rescuePacks.$inferInsert> = {}) {
++    const [{ id }] = await db.insert(S.rescuePacks).values({
++      businessId, title: `${tag} pack ${seq++}`, originalPrice: 10, rescuePrice: 4, quantityTotal: 50, quantityLeft: 50,
++      pickupStart: "00:00", pickupEnd: "00:00", expiresAt: new Date(Date.now() + 12 * HOUR), ...over,
++    }).$returningId();
++    created.packs.push(id);
++    return id;
++  }
++  async function mkOrder(customerId: number, businessId: number, status: (typeof S.orders.$inferInsert)["status"], over: Partial<typeof S.orders.$inferInsert> = {}) {
++    const [{ id }] = await db.insert(S.orders).values({
++      code: `${tag}-${seq++}`, type: "delivery", status, customerId, businessId, subtotal: 5, total: 6, deliveryFee: 1, deliveryAddress: "Calle 2", ...over,
++    }).$returningId();
++    created.orders.push(id);
++    return id;
++  }
++  const getPack = async (id: number) => (await db.select().from(S.rescuePacks).where(eq(S.rescuePacks.id, id)))[0];
++  const callerFor = (user: User) => appRouter.createCaller({ req: new Request("http://localhost/test"), resHeaders: new Headers(), user });
++  async function failure(p: Promise<unknown>) {
++    try { await p; } catch (e) { return e as { code: string; message: string }; }
++    throw new Error("se esperaba un error y la operación tuvo éxito");
++  }
++  const dest = { deliveryLat: -2.139, deliveryLng: -79.588 };
++  const delivery = (c: ReturnType<typeof callerFor>, businessId: number, productId: number) =>
++    c.orders.createDelivery({ businessId, items: [{ productId, quantity: 1 }], deliveryAddress: "Av. Cliente 456", ...dest });
++
++  // ================================================================== PACKS
++  describe("packs con fecha de vencimiento", () => {
++    it("al publicar un pack se guarda cuándo vence (próximo fin de ventana) y no aparece como vencido", async () => {
++      const owner = await mkUser("business"); await mkBusiness(owner.id);
++      const before = Date.now();
++      const { id } = await callerFor(owner).business.createRescuePack({ title: `${tag} nuevo`, originalPrice: 6, rescuePrice: 2, quantityTotal: 4, pickupStart: "19:00", pickupEnd: "20:30" });
++      created.packs.push(id);
++      const pack = await getPack(id);
++      expect(pack.expiresAt).not.toBeNull();
++      expect(pack.expiresAt!.getTime()).toBeGreaterThan(before);
++      expect(pack.expiresAt!.getTime() - before).toBeLessThanOrEqual(24 * HOUR + 1000);
++      expect(Math.abs(pack.expiresAt!.getTime() - computePackExpiry("19:00", "20:30").getTime())).toBeLessThan(5000);
++      const mine = (await callerFor(owner).business.rescuePacks()).find((p) => p.id === id)!;
++      expect(mine.expired).toBe(false);
++    });
++
++    it("un pack vencido no se muestra ni en el catálogo ni en la ficha del local", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const live = await mkPack(biz);
++      const dead = await mkPack(biz, { expiresAt: new Date(Date.now() - 1000) });
++      const c = callerFor(await mkUser("customer"));
++      const catalog = (await c.catalog.rescuePacks()).map((r) => r.pack.id);
++      expect(catalog).toContain(live);
++      expect(catalog).not.toContain(dead);
++      const detail = await c.catalog.businessDetail({ id: biz });
++      expect(detail!.rescuePacks.map((p) => p.id)).toEqual([live]);
++      expect(detail!.rescuePacks[0].reservable).toBe(true);
++    });
++
++    it("un pack de antes de existir el vencimiento (sin fecha) cuenta como vencido", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const legacy = await mkPack(biz, { expiresAt: null });
++      const c = callerFor(await mkUser("customer"));
++      expect((await c.catalog.rescuePacks()).map((r) => r.pack.id)).not.toContain(legacy);
++      expect((await failure(c.orders.createRescue({ rescuePackId: legacy, quantity: 1 }))).message).toMatch(/venci/i);
++    });
++
++    it("no se puede reservar un pack vencido y el stock no cambia", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const dead = await mkPack(biz, { expiresAt: new Date(Date.now() - 60_000), quantityLeft: 7, quantityTotal: 7 });
++      const e = await failure(callerFor(await mkUser("customer")).orders.createRescue({ rescuePackId: dead, quantity: 2 }));
++      expect(e.code).toBe("BAD_REQUEST");
++      expect(e.message).toMatch(/venci/i);
++      expect((await getPack(dead)).quantityLeft).toBe(7);
++    });
++
++    it("un pack vigente se reserva con normalidad", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const pack = await mkPack(biz, { quantityLeft: 5 });
++      const order = await callerFor(await mkUser("customer")).orders.createRescue({ rescuePackId: pack, quantity: 2 });
++      created.orders.push(order!.order.id);
++      expect((await getPack(pack)).quantityLeft).toBe(3);
++    });
++
++    it("pausar es posible, pero reactivar un pack vencido exige republicarlo", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const dead = await mkPack(biz, { expiresAt: new Date(Date.now() - 1000), isActive: false });
++      const e = await failure(callerFor(owner).business.toggleRescuePack({ id: dead, isActive: true }));
++      expect(e.code).toBe("PRECONDITION_FAILED");
++      expect(e.message).toMatch(/Republicar/);
++      const live = await mkPack(biz);
++      expect((await callerFor(owner).business.toggleRescuePack({ id: live, isActive: false })).ok).toBe(true);
++      expect((await callerFor(owner).business.toggleRescuePack({ id: live, isActive: true })).ok).toBe(true);
++    });
++
++    it("republicar da nuevo vencimiento, repone el stock y lo vuelve a mostrar", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const pack = await mkPack(biz, { expiresAt: new Date(Date.now() - 1000), quantityTotal: 6, quantityLeft: 0, isActive: false, pickupStart: "19:00", pickupEnd: "20:30" });
++      const r = await callerFor(owner).business.republishRescuePack({ id: pack });
++      const after = await getPack(pack);
++      expect(after.isActive).toBe(true);
++      expect([after.quantityTotal, after.quantityLeft]).toEqual([6, 6]);
++      expect(after.expiresAt!.getTime()).toBeGreaterThan(Date.now());
++      expect(Math.abs(after.expiresAt!.getTime() - computePackExpiry("19:00", "20:30").getTime())).toBeLessThan(5000);
++      expect(r.expiresAt.getTime()).toBe(after.expiresAt!.getTime());
++      expect((await callerFor(await mkUser("customer")).catalog.rescuePacks()).map((x) => x.pack.id)).toContain(pack);
++    });
++
++    it("republicar puede cambiar la cantidad", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const pack = await mkPack(biz, { expiresAt: new Date(Date.now() - 1000), quantityTotal: 6, quantityLeft: 1 });
++      await callerFor(owner).business.republishRescuePack({ id: pack, quantity: 9 });
++      expect([(await getPack(pack)).quantityTotal, (await getPack(pack)).quantityLeft]).toEqual([9, 9]);
++    });
++
++    it("solo el dueño del local puede republicar o activar sus packs", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const other = await mkUser("business"); await mkBusiness(other.id);
++      const pack = await mkPack(biz, { expiresAt: new Date(Date.now() - 1000), quantityLeft: 0 });
++      expect((await failure(callerFor(other).business.republishRescuePack({ id: pack }))).code).toBe("NOT_FOUND");
++      expect((await failure(callerFor(other).business.toggleRescuePack({ id: pack, isActive: false }))).code).toBe("NOT_FOUND");
++      expect((await getPack(pack)).quantityLeft).toBe(0);
++    });
++
++    it("el panel del local marca cuáles packs vencieron", async () => {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      const live = await mkPack(biz); const dead = await mkPack(biz, { expiresAt: new Date(Date.now() - 1000) }); const legacy = await mkPack(biz, { expiresAt: null });
++      const flags = Object.fromEntries((await callerFor(owner).business.rescuePacks()).map((p) => [p.id, p.expired]));
++      expect([flags[live], flags[dead], flags[legacy]]).toEqual([false, true, true]);
++    });
++  });
++
++  // ================================================================== LÍMITES
++  describe("límites de pedidos por cliente", () => {
++    async function setup() {
++      const owner = await mkUser("business"); const biz = await mkBusiness(owner.id);
++      return { biz, prod: await mkProduct(biz), pack: await mkPack(biz), customer: await mkUser("customer") };
++    }
++
++    it("con 5 pedidos en curso no se puede hacer otro (delivery ni rescate)", async () => {
++      const { biz, prod, pack, customer } = await setup();
++      for (const s of ["accepted", "accepted", "preparing", "ready", "picked_up"] as const) await mkOrder(customer.id, biz, s);
++      const c = callerFor(customer);
++      const e1 = await failure(delivery(c, biz, prod));
++      expect([e1.code, e1.message]).toEqual(["TOO_MANY_REQUESTS", expect.stringMatching(/pedidos en curso/)]);
++      expect((await failure(c.orders.createRescue({ rescuePackId: pack, quantity: 1 }))).code).toBe("TOO_MANY_REQUESTS");
++      expect((await getPack(pack)).quantityLeft).toBe(50); // el rechazo no gasta stock
++    });
++
++    it("los pedidos entregados o cancelados no cuentan como en curso", async () => {
++      const { biz, prod, customer } = await setup();
++      for (const s of ["delivered", "delivered", "cancelled", "cancelled"] as const) await mkOrder(customer.id, biz, s);
++      for (const s of ["accepted", "accepted", "preparing", "ready"] as const) await mkOrder(customer.id, biz, s);
++      const o = await delivery(callerFor(customer), biz, prod);
++      created.orders.push(o!.order.id);
++      expect(o!.order.status).toBe("pending");
++    });
++
++    it("con 3 pedidos esperando respuesta no se puede pedir más, y cancelar uno libera el cupo", async () => {
++      const { biz, prod, customer } = await setup();
++      const ids = [await mkOrder(customer.id, biz, "pending"), await mkOrder(customer.id, biz, "pending"), await mkOrder(customer.id, biz, "pending")];
++      const c = callerFor(customer);
++      const e = await failure(delivery(c, biz, prod));
++      expect([e.code, e.message]).toEqual(["TOO_MANY_REQUESTS", expect.stringMatching(/esperando respuesta/)]);
++      await c.orders.cancel({ id: ids[0] });
++      const ok = await delivery(c, biz, prod);
++      created.orders.push(ok!.order.id);
++      expect(ok!.order.status).toBe("pending");
++    });
++
++    it("máximo 12 pedidos por hora; los de hace más de una hora no cuentan", async () => {
++      const { biz, prod, customer } = await setup();
++      const old: number[] = [];
++      for (let i = 0; i < 12; i++) old.push(await mkOrder(customer.id, biz, "delivered"));
++      const e = await failure(delivery(callerFor(customer), biz, prod));
++      expect([e.code, e.message]).toEqual(["TOO_MANY_REQUESTS", expect.stringMatching(/última hora/)]);
++      await db.update(S.orders).set({ createdAt: sql`NOW() - INTERVAL 2 HOUR` }).where(inArray(S.orders.id, old));
++      const ok = await delivery(callerFor(customer), biz, prod);
++      created.orders.push(ok!.order.id);
++      expect(ok!.order.id).toBeGreaterThan(0);
++    });
++
++    it("el límite es por cliente: otro cliente sigue pudiendo pedir", async () => {
++      const { biz, prod, customer } = await setup();
++      for (let i = 0; i < 5; i++) await mkOrder(customer.id, biz, "accepted");
++      await failure(delivery(callerFor(customer), biz, prod));
++      const other = await mkUser("customer");
++      const ok = await delivery(callerFor(other), biz, prod);
++      created.orders.push(ok!.order.id);
++      expect(ok!.order.customerId).toBe(other.id);
++    });
++
++    it("20 rescates simultáneos del mismo cliente: pasan solo 5 y el stock baja exactamente 5", async () => {
++      const { pack, customer } = await setup();
++      const c = callerFor(customer);
++      const results = await Promise.allSettled(Array.from({ length: 20 }, () => c.orders.createRescue({ rescuePackId: pack, quantity: 1 })));
++      const ok = results.filter((r) => r.status === "fulfilled") as PromiseFulfilledResult<{ order: { id: number } } | null>[];
++      ok.forEach((r) => created.orders.push(r.value!.order.id));
++      expect(ok).toHaveLength(5);
++      expect(results.filter((r) => r.status === "rejected" && (r.reason as { code: string }).code === "TOO_MANY_REQUESTS")).toHaveLength(15);
++      expect((await getPack(pack)).quantityLeft).toBe(45);
++    });
++
++    it("20 pedidos de delivery simultáneos del mismo cliente: pasan solo 3 (los que esperan respuesta)", async () => {
++      const { biz, prod, customer } = await setup();
++      const c = callerFor(customer);
++      const results = await Promise.allSettled(Array.from({ length: 20 }, () => delivery(c, biz, prod)));
++      const ok = results.filter((r) => r.status === "fulfilled") as PromiseFulfilledResult<{ order: { id: number } } | null>[];
++      ok.forEach((r) => created.orders.push(r.value!.order.id));
++      expect(ok).toHaveLength(3);
++      expect(await db.select().from(S.orders).where(eq(S.orders.customerId, customer.id))).toHaveLength(3);
++    });
++  });
++});
+diff --git a/app/server/security.integration.test.ts b/app/server/security.integration.test.ts
+index 9fe7229..c33128f 100644
+--- a/app/server/security.integration.test.ts
++++ b/app/server/security.integration.test.ts
+@@ -225,7 +225,7 @@ describe.skipIf(!enabled)("seguridad y ubicación (MySQL real)", () => {
+     const owner = await mkUser("business");
+     const biz = await mkBusiness(owner.id, { approvalStatus: "rejected" });
+     const [{ id: packId }] = await db.insert(S.rescuePacks).values({
+-      businessId: biz, title: `${tag} pack`, originalPrice: 10, rescuePrice: 4, quantityTotal: 3, quantityLeft: 3, pickupStart: "00:00", pickupEnd: "00:00",
++      businessId: biz, title: `${tag} pack`, originalPrice: 10, rescuePrice: 4, quantityTotal: 3, quantityLeft: 3, pickupStart: "00:00", pickupEnd: "00:00", expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+     }).$returningId();
+     try {
+       const e = await failure(callerFor(await mkUser("customer")).orders.createRescue({ rescuePackId: packId, quantity: 1 }));
+diff --git a/app/src/components/cards.tsx b/app/src/components/cards.tsx
+index 1ce1ac6..e786dfd 100644
+--- a/app/src/components/cards.tsx
++++ b/app/src/components/cards.tsx
+@@ -1,6 +1,7 @@
+ import { Link } from "react-router";
+ import type { Business, RescuePack } from "@db/schema";
+ import { money } from "@/lib/format";
++import { packDayLabel } from "@contracts/packs";
+ import { CATEGORY_LABELS } from "@/lib/format";
+ 
+ export function BusinessCard({ business }: { business: Business & { openNow: boolean } }) {
+@@ -64,7 +65,7 @@ export function RescueCard({
+           </span>
+         </div>
+         <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+-          {business?.name} · retiro {pack.pickupStart}–{pack.pickupEnd}
++          {business?.name} · retiro {packDayLabel(pack.pickupStart, pack.pickupEnd, pack.expiresAt)} {pack.pickupStart}–{pack.pickupEnd}
+         </p>
+         <div className="mt-2 flex items-center justify-between">
+           <div className="flex items-baseline gap-1.5">
+diff --git a/app/src/pages/AdminDashboard.tsx b/app/src/pages/AdminDashboard.tsx
+index e5b4bdf..40bc076 100644
+--- a/app/src/pages/AdminDashboard.tsx
++++ b/app/src/pages/AdminDashboard.tsx
+@@ -6,7 +6,7 @@ import { LOGIN_PATH } from "@/const";
+ import { money, timeAgo } from "@/lib/format";
+ import { toast } from "sonner";
+ import type { inferRouterOutputs } from "@trpc/server";
+-import type { AppRouter } from "../../api/router";
++import type { AppRouter } from "../../server/router";
+ 
+ type Overview = inferRouterOutputs<AppRouter>["admin"]["overview"];
+ 
+diff --git a/app/src/pages/BusinessDetail.tsx b/app/src/pages/BusinessDetail.tsx
+index 466f3f8..bc88466 100644
+--- a/app/src/pages/BusinessDetail.tsx
++++ b/app/src/pages/BusinessDetail.tsx
+@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
+ import { useCart } from "@/hooks/useCart";
+ import { CATEGORY_LABELS, money } from "@/lib/format";
+ import { toast } from "sonner";
++import { packDayLabel } from "@contracts/packs";
+ 
+ export default function BusinessDetail() {
+   const { id } = useParams<{ id: string }>();
+@@ -196,7 +197,7 @@ export default function BusinessDetail() {
+                 className="overflow-hidden rounded-3xl bg-card shadow-sm ring-1 ring-border"
+               >
+                 <div className="bg-rescue-soft px-4 py-2 text-[11px] font-extrabold uppercase tracking-wide text-rescue-dark">
+-                  Quedan {pack.quantityLeft} · retiro hoy {pack.pickupStart}–
++                  Quedan {pack.quantityLeft} · retiro {packDayLabel(pack.pickupStart, pack.pickupEnd, pack.expiresAt)} {pack.pickupStart}–
+                   {pack.pickupEnd}
+                 </div>
+                 {pack.imageUrl && <img src={pack.imageUrl} alt={pack.title} loading="lazy" className="h-44 w-full object-cover" />}
+diff --git a/app/src/pages/BusinessPanel.tsx b/app/src/pages/BusinessPanel.tsx
+index c5961e5..4c99f4a 100644
+--- a/app/src/pages/BusinessPanel.tsx
++++ b/app/src/pages/BusinessPanel.tsx
+@@ -9,6 +9,7 @@ import { money, timeAgo, withinMinutes } from "@/lib/format";
+ import { ClaimBox } from "@/components/ClaimBox";
+ import { LocationPicker, type Point } from "@/components/LocationPicker";
+ import { isInServiceArea } from "@contracts/geo";
++import { computePackExpiry, describePackExpiry } from "@contracts/packs";
+ import {
+   BUSINESS_CATEGORIES,
+   BUSINESS_RULES,
+@@ -892,6 +893,15 @@ function RescueTab() {
+       utils.business.rescuePacks.invalidate();
+       utils.catalog.invalidate();
+     },
++    onError: (e) => toast.error(e.message),
++  });
++  const republish = trpc.business.republishRescuePack.useMutation({
++    onSuccess: (r) => {
++      utils.business.rescuePacks.invalidate();
++      utils.catalog.invalidate();
++      toast.success(`Pack publicado de nuevo: vence ${describePackExpiry(r.expiresAt)}`);
++    },
++    onError: (e) => toast.error(e.message),
+   });
+ 
+   return (
+@@ -978,6 +988,11 @@ function RescueTab() {
+             />
+           </label>
+         </div>
++        {/^\d{2}:\d{2}$/.test(form.pickupStart) && /^\d{2}:\d{2}$/.test(form.pickupEnd) && (
++          <p className="text-[11px] font-bold text-rescue-dark">
++            ⏳ Este pack se podrá reservar hasta {describePackExpiry(computePackExpiry(form.pickupStart, form.pickupEnd))}. Después vence y tendrás que republicarlo.
++          </p>
++        )}
+         <button
+           disabled={
+             add.isPending || imageBusy ||
+@@ -1015,17 +1030,30 @@ function RescueTab() {
+               {money(p.rescuePrice)} · quedan {p.quantityLeft}/{p.quantityTotal} ·{" "}
+               {p.pickupStart}–{p.pickupEnd}
+             </p>
++            <p className={`text-[11px] font-bold ${p.expired ? "text-destructive" : "text-muted-foreground"}`}>
++              {p.expired ? "⏳ Venció: publícalo de nuevo para que vuelva a verse" : `⏳ Vence ${describePackExpiry(p.expiresAt)}`}
++            </p>
+           </div>
+-          <button
+-            onClick={() => toggle.mutate({ id: p.id, isActive: !p.isActive })}
+-            className={`rounded-full px-3 py-1.5 text-[11px] font-extrabold ${
+-              p.isActive
+-                ? "bg-rescue-soft text-rescue-dark"
+-                : "bg-secondary text-muted-foreground"
+-            }`}
+-          >
+-            {p.isActive ? "Activo" : "Pausado"}
+-          </button>
++          {p.expired ? (
++            <button
++              disabled={republish.isPending}
++              onClick={() => republish.mutate({ id: p.id })}
++              className="rounded-full bg-rescue px-3 py-1.5 text-[11px] font-extrabold text-white disabled:opacity-50"
++            >
++              Republicar
++            </button>
++          ) : (
++            <button
++              onClick={() => toggle.mutate({ id: p.id, isActive: !p.isActive })}
++              className={`rounded-full px-3 py-1.5 text-[11px] font-extrabold ${
++                p.isActive
++                  ? "bg-rescue-soft text-rescue-dark"
++                  : "bg-secondary text-muted-foreground"
++              }`}
++            >
++              {p.isActive ? "Activo" : "Pausado"}
++            </button>
++          )}
+         </div>
+       ))}
+     </div>
+diff --git a/app/src/providers/trpc.tsx b/app/src/providers/trpc.tsx
+index 043cef3..de016db 100644
+--- a/app/src/providers/trpc.tsx
++++ b/app/src/providers/trpc.tsx
+@@ -2,7 +2,7 @@ import { createTRPCReact } from "@trpc/react-query";
+ import { httpBatchLink } from "@trpc/client";
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+ import superjson from "superjson";
+-import type { AppRouter } from "../../api/router";
++import type { AppRouter } from "../../server/router";
+ import type { ReactNode } from "react";
+ 
+ export const trpc = createTRPCReact<AppRouter>();
