@@ -10,6 +10,7 @@ import { ClaimBox } from "@/components/ClaimBox";
 import { LocationPicker, type Point } from "@/components/LocationPicker";
 import { isInServiceArea } from "@contracts/geo";
 import { computePackExpiry, describePackExpiry } from "@contracts/packs";
+import { IMAGE_RULES } from "@contracts/constants";
 import {
   BUSINESS_CATEGORIES,
   BUSINESS_RULES,
@@ -690,6 +691,7 @@ async function compressProductImage(file: File): Promise<string> {
 type ImageUploadInput = {
   contentType: "image/jpeg";
   kind: "product" | "rescue-pack";
+  size: number;
 };
 type ImageUploadResult = { uploadUrl: string; imageUrl: string };
 
@@ -700,7 +702,8 @@ async function uploadCompressedImage(
 ): Promise<string> {
   const blob = await fetch(dataUrl).then((response) => response.blob());
   if (blob.type !== "image/jpeg") throw new Error("La imagen optimizada no tiene un formato válido.");
-  const target = await createUpload({ contentType: "image/jpeg", kind });
+  if (blob.size > IMAGE_RULES.maxBytes) throw new Error("La imagen es muy pesada (máximo 2 MB). Prueba con otra foto.");
+  const target = await createUpload({ contentType: "image/jpeg", kind, size: blob.size });
   const response = await fetch(target.uploadUrl, {
     method: "PUT",
     headers: { "Content-Type": "image/jpeg" },

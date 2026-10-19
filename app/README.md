@@ -83,3 +83,11 @@ En una base vacía (instalación nueva) no hace falta nada de esto.
 - «Reenviar correo de verificación» genera un enlace nuevo y anula el anterior. Recuperar la contraseña también verifica el correo.
 - Cambiar la contraseña, o «Cerrar sesión en todos los dispositivos» (Perfil), invalida todas las sesiones abiertas.
 - Límites de intentos de inicio de sesión: por IP y por correo. En producción define `TRUSTED_PROXY_HOPS` (cuántos proxies hay delante) para que la IP no se pueda falsificar. Con Vercel reenviando `/api` a Railway suele ser **2**; compruébalo con `DEBUG_CLIENT_IP=true` (ver `.env.example`): si el valor es incorrecto, todos los usuarios comparten el mismo límite de intentos.
+
+## Fotos (Cloudflare R2 / S3)
+
+- Las fotos suben directo a R2 con una URL firmada de 5 minutos que ata **el tipo (JPG/PNG/WebP) y el tamaño exacto** del archivo (máximo 2 MB). Cada usuario puede pedir hasta 30 subidas por hora.
+- Solo se pueden guardar imágenes que subió el propio dueño a su carpeta (`businesses/<id>/product`, `businesses/<id>/rescue-pack`, `couriers/<id>/profile`). Las URLs de terceros ya no se aceptan; las imágenes antiguas guardadas antes siguen funcionando mientras no se cambien.
+- Al reemplazar o quitar una foto se borra la anterior del bucket (solo si es propia y nadie más la usa). Las fotos que se suben pero nunca se guardan quedan en el bucket: puedes poner una regla de ciclo de vida en R2 si te preocupa el espacio.
+- El bucket necesita CORS con `PUT` desde tu dominio y `AllowedHeaders: ["content-type"]`.
+- Si alguna vez R2 rechazara las subidas con `SignatureDoesNotMatch`, quita `"content-length"` de `signableHeaders` en `server/lib/image-rules.ts` (el tipo seguirá atado; el tamaño ya se valida al pedir la URL).

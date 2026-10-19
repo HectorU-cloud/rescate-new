@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
-import { APP_ROLES, type AppRole } from "@contracts/constants";
+import { APP_ROLES, IMAGE_RULES, type AppRole } from "@contracts/constants";
 import { toast } from "sonner";
 import { Camera, ShieldCheck } from "lucide-react";
 import { getFirebaseVapidKey, getFirebaseWebConfig, loadPushClient } from "@/lib/push-client";
@@ -47,7 +47,8 @@ export default function Profile() {
       context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
       bitmap.close();
       const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => b ? resolve(b) : reject(new Error("No se pudo comprimir la imagen.")), "image/webp", 0.82));
-      const signed = await createCourierPhotoUpload.mutateAsync({ contentType: "image/webp" });
+      if (blob.size > IMAGE_RULES.maxBytes) throw new Error("La foto es muy pesada (máximo 2 MB). Prueba con otra.");
+      const signed = await createCourierPhotoUpload.mutateAsync({ contentType: "image/webp", size: blob.size });
       const response = await fetch(signed.uploadUrl, { method: "PUT", headers: { "Content-Type": "image/webp" }, body: blob });
       if (!response.ok) throw new Error("Falló la subida a R2. Revisa la configuración CORS del bucket.");
       setPhotoUrl(signed.imageUrl);

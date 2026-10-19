@@ -1,16 +1,12 @@
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { DeleteObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import { nanoid } from "nanoid";
 import { TRPCError } from "@trpc/server";
+import { IMAGE_RULES } from "@contracts/constants";
 import { env } from "./env";
+import { consume } from "./rate-bucket";
+import { MIME_EXTENSIONS, createStorageClient, keyFromOwnedUrl, presignImageUpload, type SupportedImageMime } from "./image-rules";
 
-const MIME_EXTENSIONS = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-} as const;
-
-export type SupportedImageMime = keyof typeof MIME_EXTENSIONS;
+export type { SupportedImageMime } from "./image-rules";
 
 let client: S3Client | undefined;
 
@@ -23,23 +19,29 @@ export function imageStorageConfigured() {
 function getClient() {
   if (!imageStorageConfigured()) return null;
   if (!client) {
-    client = new S3Client({
+    client = createStorageClient({
       region: env.s3Region,
-      ...(env.s3Endpoint ? { endpoint: env.s3Endpoint, forcePathStyle: true } : {}),
-      credentials: {
-        accessKeyId: env.s3AccessKeyId,
-        secretAccessKey: env.s3SecretAccessKey,
-      },
+      endpoint: env.s3Endpoint || undefined,
+      accessKeyId: env.s3AccessKeyId,
+      secretAccessKey: env.s3SecretAccessKey,
     });
   }
   return client;
 }
 
+/** Carpetas donde cada dueño puede subir y desde donde puede usar imágenes. */
+export const businessImageFolder = (businessId: number, kind: "product" | "rescue-pack") => `businesses/${businessId}/${kind}`;
+export const courierPhotoFolder = (userId: number) => `couriers/${userId}/profile`;
+
 export async function createImageUploadUrl(args: {
   businessId?: number;
   contentType: SupportedImageMime;
+  /** Tamaño exacto en bytes del archivo que se va a subir. Queda atado a la firma. */
+  size: number;
   kind: "product" | "rescue-pack" | "courier-profile";
   ownerId?: number;
+  /** Quién pide la subida (para limitar cuántas puede pedir por hora). */
+  userId: number;
 }) {
   const s3 = getClient();
   if (!s3) {
@@ -48,17 +50,49 @@ export async function createImageUploadUrl(args: {
       message: "El almacenamiento de imágenes no está configurado. Revisa S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY y S3_PUBLIC_URL.",
     });
   }
+  if (!Number.isInteger(args.size) || args.size < 1 || args.size > IMAGE_RULES.maxBytes) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `La imagen es muy pesada (máximo ${IMAGE_RULES.maxBytes / (1024 * 1024)} MB). Prueba con otra foto.`,
+    });
+  }
+  const limit = consume(`img:${args.userId}`, 60 * 60 * 1000, IMAGE_RULES.maxUploadsPerHour);
+  if (!limit.allowed) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Subiste muchas fotos en poco tiempo. Inténtalo de nuevo más tarde." });
+  }
 
-  const extension = MIME_EXTENSIONS[args.contentType];
-  const key = args.kind === "courier-profile"
-    ? `couriers/${args.ownerId ?? args.businessId}/profile/${nanoid(24)}.${extension}`
-    : `businesses/${args.businessId ?? 0}/${args.kind}/${nanoid(24)}.${extension}`;
-  const command = new PutObjectCommand({
-    Bucket: env.s3Bucket,
-    Key: key,
-    ContentType: args.contentType,
-  });
-  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+  const folder = args.kind === "courier-profile"
+    ? courierPhotoFolder(args.ownerId ?? args.userId)
+    : businessImageFolder(args.businessId ?? 0, args.kind);
+  const key = `${folder}/${nanoid(24)}.${MIME_EXTENSIONS[args.contentType]}`;
+  const uploadUrl = await presignImageUpload(s3, { bucket: env.s3Bucket, key, contentType: args.contentType, size: args.size });
   const imageUrl = `${env.s3PublicUrl}/${key.split("/").map(encodeURIComponent).join("/")}`;
   return { uploadUrl, imageUrl, key, contentType: args.contentType };
+}
+
+/**
+ * Valida la imagen que se quiere guardar: debe ser una que subió ESTE dueño a SU carpeta
+ * (no una URL de terceros ni de otro comercio). Lo que ya estaba guardado se acepta tal cual,
+ * así editar otros datos no rompe imágenes antiguas.
+ */
+export function assertValidImageUrl(url: string | null | undefined, folder: string, current?: string | null) {
+  if (!url) return;
+  if (current && url === current) return;
+  if (!keyFromOwnedUrl(env.s3PublicUrl, url, folder)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "La imagen no es válida. Súbela desde la app (JPG, PNG o WebP)." });
+  }
+}
+
+/** Borra del almacenamiento una imagen de `folder`. Nunca lanza error: es limpieza, no debe romper la operación. */
+export async function deleteStoredImage(url: string, folder: string) {
+  const key = keyFromOwnedUrl(env.s3PublicUrl, url, folder);
+  const s3 = getClient();
+  if (!key || !s3) return false;
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: env.s3Bucket, Key: key }));
+    return true;
+  } catch (e) {
+    console.error("[images] no se pudo borrar", key, e instanceof Error ? e.message : e);
+    return false;
+  }
 }

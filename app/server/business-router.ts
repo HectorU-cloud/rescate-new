@@ -8,7 +8,9 @@ import { BUSINESS_RULES } from "@contracts/constants";
 import { computePackExpiry, isPackExpired } from "@contracts/packs";
 import { distanceMeters, isInServiceArea } from "@contracts/geo";
 import { codesMatch } from "./lib/codes";
-import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
+import { assertValidImageUrl, businessImageFolder, createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
+import { releaseReplacedImage } from "./lib/image-cleanup";
+import { IMAGE_RULES } from "@contracts/constants";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
 import { logOrderEvent } from "./lib/order-events";
 import { MIN_CANCEL_REASON_LENGTH, businessCancelNeedsReason, businessCancelableFrom, canBusinessCancel } from "./lib/order-rules";
@@ -91,13 +93,17 @@ export const businessRouter = createRouter({
     .input(z.object({
       contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
       kind: z.enum(["product", "rescue-pack"]),
+      // Tamaño exacto del archivo en bytes: queda atado a la firma de la URL de subida
+      size: z.number().int().min(1).max(IMAGE_RULES.maxBytes),
     }))
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
       return createImageUploadUrl({
         businessId: biz.id,
         contentType: input.contentType as SupportedImageMime,
+        size: input.size,
         kind: input.kind,
+        userId: ctx.user.id,
       });
     }),
   myBusiness: authedQuery.query(async ({ ctx }) => {
@@ -348,11 +354,13 @@ export const businessRouter = createRouter({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (input.imageUrl && !/^data:image\/(jpeg|png|webp);base64,/.test(input.imageUrl) && !/^https:\/\//.test(input.imageUrl)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "La imagen debe ser JPG, PNG, WebP o una URL HTTPS." });
-      }
       const biz = await requireMyBusiness(ctx.user.id);
       const db = getDb();
+      const folder = businessImageFolder(biz.id, "product");
+      const existing = input.id
+        ? await db.query.products.findFirst({ where: and(eq(products.id, input.id), eq(products.businessId, biz.id)) })
+        : undefined;
+      assertValidImageUrl(input.imageUrl, folder, existing?.imageUrl);
       if (input.id) {
         await db
           .update(products)
@@ -366,6 +374,8 @@ export const businessRouter = createRouter({
           .where(
             and(eq(products.id, input.id), eq(products.businessId, biz.id)),
           );
+        // Si cambió o quitó la foto, borra la anterior del almacenamiento
+        await releaseReplacedImage(existing?.imageUrl, input.imageUrl ?? null, folder);
         return { id: input.id };
       }
       const [{ id }] = await db
@@ -420,9 +430,7 @@ export const businessRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
-      if (input.imageUrl && !/^data:image\/(jpeg|png|webp);base64,/.test(input.imageUrl) && !/^https:\/\//.test(input.imageUrl)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "La imagen debe ser JPG, PNG, WebP o una URL HTTPS." });
-      }
+      assertValidImageUrl(input.imageUrl, businessImageFolder(biz.id, "rescue-pack"));
       if (input.rescuePrice >= input.originalPrice) {
         throw new TRPCError({
           code: "BAD_REQUEST",

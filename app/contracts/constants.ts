@@ -108,6 +108,14 @@ export type AppRole = (typeof APP_ROLES)[number]["id"];
 // ---------------------------------------------------------------------------
 // Reglas de negocio del delivery (únicas, compartidas frontend ↔ backend)
 // ---------------------------------------------------------------------------
+// Imágenes subidas (fotos de platos, packs y repartidores).
+export const IMAGE_RULES = {
+  // Tamaño máximo de un archivo. Las fotos ya llegan comprimidas (<0.5 MB); esto es solo un tope de seguridad.
+  maxBytes: 2 * 1024 * 1024,
+  // Cuántas subidas puede pedir cada usuario por hora.
+  maxUploadsPerHour: 30,
+} as const;
+
 export const BUSINESS_RULES = {
   // Zona horaria de Ecuador continental (UTC-5, sin horario de verano)
   timezoneOffsetHours: -5,

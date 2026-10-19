@@ -2,7 +2,9 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
-import { createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
+import { assertValidImageUrl, courierPhotoFolder, createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
+import { releaseReplacedImage } from "./lib/image-cleanup";
+import { IMAGE_RULES } from "@contracts/constants";
 import { getDb } from "./queries/connection";
 import { customerAddresses, users } from "@db/schema";
 import { sendPushToUser } from "./lib/push-notifications";
@@ -56,18 +58,19 @@ export const profileRouter = createRouter({
     return user ?? null;
   }),
   createCourierPhotoUpload: authedQuery
-    .input(z.object({ contentType: z.enum(["image/jpeg", "image/png", "image/webp"]) }))
+    .input(z.object({ contentType: z.enum(["image/jpeg", "image/png", "image/webp"]), size: z.number().int().min(1).max(IMAGE_RULES.maxBytes) }))
     .mutation(async ({ ctx, input }) => {
       if (ctx.user.appRole !== "courier") throw new TRPCError({ code: "FORBIDDEN", message: "Selecciona primero el modo repartidor." });
-      return createImageUploadUrl({ ownerId: ctx.user.id, contentType: input.contentType as SupportedImageMime, kind: "courier-profile" });
+      return createImageUploadUrl({ ownerId: ctx.user.id, userId: ctx.user.id, contentType: input.contentType as SupportedImageMime, size: input.size, kind: "courier-profile" });
     }),
   updateCourierProfile: authedQuery
     .input(z.object({ photoUrl: z.string().url().max(1000).optional(), vehicle: z.string().trim().max(80).optional(), plate: z.string().trim().max(20).optional(), bio: z.string().trim().max(300).optional() }))
     .mutation(async ({ ctx, input }) => {
       if (ctx.user.appRole !== "courier") throw new TRPCError({ code: "FORBIDDEN", message: "Selecciona primero el modo repartidor." });
-      if (input.photoUrl && !input.photoUrl.startsWith("https://")) throw new TRPCError({ code: "BAD_REQUEST", message: "La foto debe usar HTTPS." });
       const db = getDb();
       const [current] = await db.select().from(users).where(eq(users.id, ctx.user.id)).limit(1);
+      // La foto debe ser una que ESTE repartidor subió a su carpeta (no una URL de terceros)
+      assertValidImageUrl(input.photoUrl, courierPhotoFolder(ctx.user.id), current?.courierPhotoUrl);
       // Si cambia foto, vehículo o placa, el perfil debe revisarse de nuevo.
       const sensitiveChange =
         (input.photoUrl !== undefined && input.photoUrl !== current?.courierPhotoUrl) ||
@@ -79,6 +82,8 @@ export const profileRouter = createRouter({
           ? { courierVerification: "pending" as const, courierApproved: false, courierReviewNote: null }
           : {}),
       }).where(eq(users.id, ctx.user.id));
+      // Si cambió la foto, borra la anterior del almacenamiento
+      if (input.photoUrl !== undefined) await releaseReplacedImage(current?.courierPhotoUrl, input.photoUrl, courierPhotoFolder(ctx.user.id));
       return { ok: true, backToReview: sensitiveChange };
     }),
   adminCouriers: adminQuery.query(async () => getDb().select({ id: users.id, name: users.name, email: users.email, courierPhotoUrl: users.courierPhotoUrl, courierVehicle: users.courierVehicle, courierPlate: users.courierPlate, courierBio: users.courierBio, courierApproved: users.courierApproved, courierRating: users.courierRating, courierRatingCount: users.courierRatingCount }).from(users).where(eq(users.appRole, "courier"))),
