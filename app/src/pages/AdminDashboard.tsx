@@ -242,7 +242,11 @@ function BusinessesTab() {
                 }}
                 className="flex-1 rounded-xl border border-destructive py-2.5 text-sm font-extrabold text-destructive disabled:opacity-50"
               >
-                {b.approvalStatus === "approved"? (b.pendingName || b.pendingAddress? "Rechazar cambios": "Suspender"): "Rechazar"}
+                {b.approvalStatus === "approved"
+                ? (b.pendingName || b.pendingAddress
+                    ? "Rechazar cambios"
+                    : "Suspender")
+                : "Rechazar"}
               </button>
             )}
           </div>
@@ -393,7 +397,8 @@ function ClaimsTab() {
               <button
                 disabled={resolve.isPending}
                 onClick={() => answer(c.id, "rejected")}
-                className="flex-1 rounded-xl border border-destructive py-2.5 text-sm font-extrabold text-destructive disabled:opacity-50">
+                className="flex-1 rounded-xl border border-destructive py-2.5 text-sm font-extrabold text-destructive disabled:opacity-50"
+              >
                 Rechazar
               </button>
             </div>
