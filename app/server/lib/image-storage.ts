@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+import { CopyObjectCommand, DeleteObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import { nanoid } from "nanoid";
 import { TRPCError } from "@trpc/server";
 import { IMAGE_RULES } from "@contracts/constants";
@@ -64,10 +64,38 @@ export async function createImageUploadUrl(args: {
   const folder = args.kind === "courier-profile"
     ? courierPhotoFolder(args.ownerId ?? args.userId)
     : businessImageFolder(args.businessId ?? 0, args.kind);
-  const key = `${folder}/${nanoid(24)}.${MIME_EXTENSIONS[args.contentType]}`;
+  // Todas las subidas empiezan en staging/: R2 puede borrar por ciclo de vida las no confirmadas.
+  const key = `staging/${folder}/${nanoid(24)}.${MIME_EXTENSIONS[args.contentType]}`;
   const uploadUrl = await presignImageUpload(s3, { bucket: env.s3Bucket, key, contentType: args.contentType, size: args.size });
   const imageUrl = `${env.s3PublicUrl}/${key.split("/").map(encodeURIComponent).join("/")}`;
   return { uploadUrl, imageUrl, key, contentType: args.contentType };
+}
+
+/** Promueve una subida temporal a su carpeta permanente cuando la referencia se guarda en BD. */
+export async function promoteStagedImageUrl(url: string | null | undefined, folder: string): Promise<string | null | undefined> {
+  if (!url) return url;
+  const prefix = `${env.s3PublicUrl}/staging/${folder}/`;
+  if (!url.startsWith(prefix)) return url;
+  const file = url.slice(prefix.length);
+  if (/[?#\\/]/.test(file)) throw new TRPCError({ code: "BAD_REQUEST", message: "La imagen temporal no es válida." });
+  let decoded: string;
+  try { decoded = decodeURIComponent(file); } catch { throw new TRPCError({ code: "BAD_REQUEST", message: "La imagen temporal no es válida." }); }
+  if (!/^[A-Za-z0-9_-]{10,40}\.(jpg|png|webp)$/.test(decoded)) throw new TRPCError({ code: "BAD_REQUEST", message: "La imagen temporal no es válida." });
+  const s3 = getClient();
+  if (!s3) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "El almacenamiento de imágenes no está configurado." });
+  const sourceKey = `staging/${folder}/${decoded}`;
+  const destinationKey = `${folder}/${decoded}`;
+  try {
+    await s3.send(new CopyObjectCommand({ Bucket: env.s3Bucket, Key: destinationKey, CopySource: `${env.s3Bucket}/${sourceKey.split("/").map(encodeURIComponent).join("/")}` }));
+  } catch (e) {
+    console.error("[images] no se pudo confirmar la subida temporal", sourceKey, e instanceof Error ? e.message : e);
+    throw new TRPCError({ code: "BAD_REQUEST", message: "No se pudo confirmar la foto. Vuelve a subirla e inténtalo de nuevo." });
+  }
+  // Si falla el borrado, la regla de ciclo de vida de staging/ lo limpiará posteriormente.
+  await s3.send(new DeleteObjectCommand({ Bucket: env.s3Bucket, Key: sourceKey })).catch((e) => {
+    console.warn("[images] copia confirmada; limpieza temporal pendiente", sourceKey, e instanceof Error ? e.message : e);
+  });
+  return `${env.s3PublicUrl}/${destinationKey.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 /**

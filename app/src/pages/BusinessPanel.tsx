@@ -78,9 +78,12 @@ function BusinessSetup() {
     closesAt: "22:00",
   });
   const save = trpc.business.upsertBusiness.useMutation({
-    onSuccess: () => {
-      toast.success("Enviamos tu local a revisión. Te avisaremos cuando esté aprobado.");
+    onSuccess: (result) => {
+      toast.success(result.reviewRequired
+        ? "Nombre/dirección enviados a revisión. Los datos actuales seguirán publicados hasta la aprobación."
+        : "Datos del local guardados.");
       utils.business.myBusiness.invalidate();
+      utils.catalog.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });

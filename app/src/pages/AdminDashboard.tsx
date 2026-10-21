@@ -201,6 +201,7 @@ function BusinessesTab() {
             <div>
               <h2 className="font-extrabold">{b.emoji} {b.name}</h2>
               <p className="text-xs font-semibold text-muted-foreground">{b.address} · {b.phone ?? "sin teléfono"}</p>
+              {(b.pendingName || b.pendingAddress) && <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950"><p className="font-extrabold">📝 Solicitud de cambio de datos</p>{b.pendingName && <p>Nombre actual: <b>{b.name}</b> → solicitado: <b>{b.pendingName}</b></p>}{b.pendingAddress && <p>Dirección actual: <b>{b.address}</b> → solicitada: <b>{b.pendingAddress}</b></p>}</div>}
               <p className="text-xs text-muted-foreground">Dueño: {b.ownerName ?? "—"} · {b.ownerEmail ?? "sin correo"}</p>
               <p className={`text-xs font-bold ${b.locationConfirmed ? "text-brand-dark" : "text-destructive"}`}>
                 {b.locationConfirmed ? (
@@ -222,16 +223,16 @@ function BusinessesTab() {
           </p>
           {b.approvalNote && <p className="text-xs font-bold text-destructive">Motivo: {b.approvalNote}</p>}
           <div className="flex gap-2">
-            {b.approvalStatus !== "approved" && (
+            {(b.approvalStatus !== "approved" || Boolean(b.pendingName || b.pendingAddress)) && (
               <button
                 disabled={review.isPending || !b.locationConfirmed}
                 onClick={() => review.mutate({ id: b.id, decision: "approved" })}
                 className="flex-1 rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
               >
-                Aprobar
+                {b.approvalStatus === "approved" ? "Aprobar cambios" : "Aprobar"}
               </button>
             )}
-            {b.approvalStatus !== "rejected" && (
+            {(b.approvalStatus !== "rejected" || Boolean(b.pendingName || b.pendingAddress)) && (
               <button
                 disabled={review.isPending}
                 onClick={() => {
@@ -241,7 +242,7 @@ function BusinessesTab() {
                 }}
                 className="flex-1 rounded-xl border border-destructive py-2.5 text-sm font-extrabold text-destructive disabled:opacity-50"
               >
-                {b.approvalStatus === "approved" ? "Suspender" : "Rechazar"}
+                {b.approvalStatus === "approved"? (b.pendingName || b.pendingAddress? "Rechazar cambios": "Suspender"): "Rechazar"}
               </button>
             )}
           </div>
@@ -389,7 +390,10 @@ function ClaimsTab() {
               <button disabled={resolve.isPending} onClick={() => answer(c.id, "resolved")} className="flex-1 rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50">
                 Resolver
               </button>
-              <button disabled={resolve.isPending} onClick={() => answer(c.id, "rejected")} className="flex-1 rounded-xl border border-destructive py-2.5 text-sm font-extrabold text-destructive disabled:opacity-50">
+              <button
+                disabled={resolve.isPending}
+                onClick={() => answer(c.id, "rejected")}
+                className="flex-1 rounded-xl border border-destructive py-2.5 text-sm font-extrabold text-destructive disabled:opacity-50">
                 Rechazar
               </button>
             </div>

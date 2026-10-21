@@ -8,7 +8,7 @@ import { BUSINESS_RULES } from "@contracts/constants";
 import { computePackExpiry, isPackExpired } from "@contracts/packs";
 import { distanceMeters, isInServiceArea } from "@contracts/geo";
 import { codesMatch } from "./lib/codes";
-import { assertValidImageUrl, businessImageFolder, createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
+import { assertValidImageUrl, businessImageFolder, createImageUploadUrl, promoteStagedImageUrl, type SupportedImageMime } from "./lib/image-storage";
 import { releaseReplacedImage } from "./lib/image-cleanup";
 import { IMAGE_RULES } from "@contracts/constants";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
@@ -147,13 +147,27 @@ export const businessRouter = createRouter({
       });
       if (existing) {
         const loc = lat !== undefined && lng !== undefined ? locationChange(existing, lat, lng) : null;
-        await db
-          .update(businesses)
-          // Un comercio rechazado que corrige sus datos vuelve a revisión.
-          .set({ ...data, ...(existing.approvalStatus === "rejected" ? { approvalStatus: "pending" as const, approvalNote: null } : {}), ...(loc?.fields ?? {}) })
-          .where(eq(businesses.id, existing.id));
+        const nameChanged = data.name !== existing.name;
+        const addressChanged = data.address !== existing.address;
+        const requiresBusinessReview = existing.approvalStatus === "approved" && (nameChanged || addressChanged);
+        const safeData = requiresBusinessReview
+          ? { ...data, name: existing.name, address: existing.address }
+          : data;
+        await db.update(businesses).set({
+          ...safeData,
+          ...(requiresBusinessReview ? {
+            pendingName: nameChanged ? data.name : existing.pendingName,
+            pendingAddress: addressChanged ? data.address : existing.pendingAddress,
+          } : {}),
+          ...(existing.approvalStatus === "rejected" ? { approvalStatus: "pending" as const, approvalNote: null } : {}),
+          ...(loc?.fields ?? {}),
+        }).where(eq(businesses.id, existing.id));
         if (loc?.needsReview) await notifyAdminsLocationReview(existing.name);
-        return { id: existing.id };
+        if (requiresBusinessReview) {
+          const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
+          await sendPushToUsers(admins.map((a) => a.id), { title: "Cambio de comercio por revisar 🏪", body: `${existing.name} solicitó cambiar ${nameChanged && addressChanged ? "nombre y dirección" : nameChanged ? "el nombre" : "la dirección"}.`, url: "/admin" }).catch(() => undefined);
+        }
+        return { id: existing.id, reviewRequired: requiresBusinessReview };
       }
       if (lat === undefined || lng === undefined) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Marca la ubicación de tu local en el mapa" });
@@ -172,7 +186,7 @@ export const businessRouter = createRouter({
         .$returningId();
       const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
       await sendPushToUsers(admins.map((a) => a.id), { title: "Nuevo comercio por aprobar 🏪", body: `${input.name} solicita publicarse.`, url: "/admin" }).catch(() => undefined);
-      return { id };
+      return { id, reviewRequired: false };
     }),
 
   // Reglas de entrega y horario (sin tocar el resto de datos del local)
@@ -357,17 +371,18 @@ export const businessRouter = createRouter({
       const biz = await requireMyBusiness(ctx.user.id);
       const db = getDb();
       const folder = businessImageFolder(biz.id, "product");
+      const finalImageUrl = await promoteStagedImageUrl(input.imageUrl, folder);
       const existing = input.id
         ? await db.query.products.findFirst({ where: and(eq(products.id, input.id), eq(products.businessId, biz.id)) })
         : undefined;
-      assertValidImageUrl(input.imageUrl, folder, existing?.imageUrl);
+      assertValidImageUrl(finalImageUrl, folder, existing?.imageUrl);
       if (input.id) {
         await db
           .update(products)
           .set({
             name: input.name,
             description: input.description ?? null,
-            imageUrl: input.imageUrl ?? null,
+            imageUrl: finalImageUrl ?? null,
             price: input.price,
             emoji: input.emoji ?? "🍽️",
           })
@@ -375,7 +390,7 @@ export const businessRouter = createRouter({
             and(eq(products.id, input.id), eq(products.businessId, biz.id)),
           );
         // Si cambió o quitó la foto, borra la anterior del almacenamiento
-        await releaseReplacedImage(existing?.imageUrl, input.imageUrl ?? null, folder);
+        await releaseReplacedImage(existing?.imageUrl, finalImageUrl ?? null, folder);
         return { id: input.id };
       }
       const [{ id }] = await db
@@ -384,7 +399,7 @@ export const businessRouter = createRouter({
           businessId: biz.id,
           name: input.name,
           description: input.description ?? null,
-          imageUrl: input.imageUrl ?? null,
+          imageUrl: finalImageUrl ?? null,
           price: input.price,
           emoji: input.emoji ?? "🍽️",
         })
@@ -430,7 +445,9 @@ export const businessRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
-      assertValidImageUrl(input.imageUrl, businessImageFolder(biz.id, "rescue-pack"));
+      const packFolder = businessImageFolder(biz.id, "rescue-pack");
+      const finalImageUrl = await promoteStagedImageUrl(input.imageUrl, packFolder);
+      assertValidImageUrl(finalImageUrl, packFolder);
       if (input.rescuePrice >= input.originalPrice) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -443,7 +460,7 @@ export const businessRouter = createRouter({
           businessId: biz.id,
           title: input.title,
           description: input.description ?? null,
-          imageUrl: input.imageUrl ?? null,
+          imageUrl: finalImageUrl ?? null,
           originalPrice: input.originalPrice,
           rescuePrice: input.rescuePrice,
           quantityTotal: input.quantityTotal,

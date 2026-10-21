@@ -2,7 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { createRouter, authedQuery, adminQuery } from "./middleware";
-import { assertValidImageUrl, courierPhotoFolder, createImageUploadUrl, type SupportedImageMime } from "./lib/image-storage";
+import { assertValidImageUrl, courierPhotoFolder, createImageUploadUrl, promoteStagedImageUrl, type SupportedImageMime } from "./lib/image-storage";
 import { releaseReplacedImage } from "./lib/image-cleanup";
 import { IMAGE_RULES } from "@contracts/constants";
 import { getDb } from "./queries/connection";
@@ -69,11 +69,12 @@ export const profileRouter = createRouter({
       if (ctx.user.appRole !== "courier") throw new TRPCError({ code: "FORBIDDEN", message: "Selecciona primero el modo repartidor." });
       const db = getDb();
       const [current] = await db.select().from(users).where(eq(users.id, ctx.user.id)).limit(1);
-      // La foto debe ser una que ESTE repartidor subió a su carpeta (no una URL de terceros)
-      assertValidImageUrl(input.photoUrl, courierPhotoFolder(ctx.user.id), current?.courierPhotoUrl);
+      // Confirma la subida temporal y luego valida que la foto pertenezca a este repartidor.
+      const finalPhotoUrl = await promoteStagedImageUrl(input.photoUrl, courierPhotoFolder(ctx.user.id));
+      assertValidImageUrl(finalPhotoUrl, courierPhotoFolder(ctx.user.id), current?.courierPhotoUrl);
       // Si cambia foto, vehículo o placa, el perfil debe revisarse de nuevo.
       const sensitiveChange =
-        (input.photoUrl !== undefined && input.photoUrl !== current?.courierPhotoUrl) ||
+        (input.photoUrl !== undefined && finalPhotoUrl !== current?.courierPhotoUrl) ||
         (input.vehicle !== undefined && input.vehicle !== current?.courierVehicle) ||
         (input.plate !== undefined && input.plate !== current?.courierPlate);
       await db.update(users).set({
@@ -83,7 +84,7 @@ export const profileRouter = createRouter({
           : {}),
       }).where(eq(users.id, ctx.user.id));
       // Si cambió la foto, borra la anterior del almacenamiento
-      if (input.photoUrl !== undefined) await releaseReplacedImage(current?.courierPhotoUrl, input.photoUrl, courierPhotoFolder(ctx.user.id));
+      if (input.photoUrl !== undefined) await releaseReplacedImage(current?.courierPhotoUrl, finalPhotoUrl, courierPhotoFolder(ctx.user.id));
       return { ok: true, backToReview: sensitiveChange };
     }),
   adminCouriers: adminQuery.query(async () => getDb().select({ id: users.id, name: users.name, email: users.email, courierPhotoUrl: users.courierPhotoUrl, courierVehicle: users.courierVehicle, courierPlate: users.courierPlate, courierBio: users.courierBio, courierApproved: users.courierApproved, courierRating: users.courierRating, courierRatingCount: users.courierRatingCount }).from(users).where(eq(users.appRole, "courier"))),

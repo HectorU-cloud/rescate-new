@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, sql, or, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
@@ -107,7 +107,7 @@ export const adminRouter = createRouter({
       const db = getDb();
       const rows = await db
         .select({
-          id: businesses.id, name: businesses.name, category: businesses.category, address: businesses.address,
+          id: businesses.id, name: businesses.name, category: businesses.category, address: businesses.address, pendingName: businesses.pendingName, pendingAddress: businesses.pendingAddress,
           phone: businesses.phone, emoji: businesses.emoji, approvalStatus: businesses.approvalStatus, approvalNote: businesses.approvalNote,
           lat: businesses.lat, lng: businesses.lng, locationConfirmed: businesses.locationConfirmed,
           opensAt: businesses.opensAt, closesAt: businesses.closesAt, deliveryRadiusKm: businesses.deliveryRadiusKm,
@@ -117,7 +117,7 @@ export const adminRouter = createRouter({
         })
         .from(businesses)
         .leftJoin(users, eq(users.id, businesses.ownerId))
-        .where(input?.status ? eq(businesses.approvalStatus, input.status) : undefined)
+        .where(input?.status === "pending" ? or(eq(businesses.approvalStatus, "pending"), isNotNull(businesses.pendingName), isNotNull(businesses.pendingAddress)) : input?.status ? eq(businesses.approvalStatus, input.status) : undefined)
         .orderBy(desc(businesses.createdAt));
       return rows;
     }),
@@ -138,10 +138,25 @@ export const adminRouter = createRouter({
       if (input.decision === "approved" && !biz.locationConfirmed) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "El comercio aún no marcó su ubicación real en el mapa. No se puede aprobar." });
       }
+      const hasPendingDetails = Boolean(biz.pendingName || biz.pendingAddress);
+      if (hasPendingDetails && biz.approvalStatus === "approved") {
+        await db.update(businesses).set(input.decision === "approved" ? {
+          ...(biz.pendingName ? { name: biz.pendingName } : {}),
+          ...(biz.pendingAddress ? { address: biz.pendingAddress } : {}),
+          pendingName: null, pendingAddress: null, approvalNote: null,
+        } : {
+          pendingName: null, pendingAddress: null, approvalNote: null,
+        }).where(eq(businesses.id, input.id));
+        await sendPushToUser(biz.ownerId, input.decision === "approved"
+          ? { title: "Cambios de tu comercio aprobados", body: "El nuevo nombre y/o dirección ya están publicados.", url: "/panel" }
+          : { title: "Cambios de tu comercio rechazados", body: input.note!, url: "/panel" },
+        ).catch((error) => console.error("Error avisando revisión al comercio:", error));
+        return { ok: true, changeReview: true };
+      }
       await db.update(businesses).set({
         approvalStatus: input.decision,
         approvalNote: input.decision === "rejected" ? input.note! : null,
-        // Un comercio rechazado o suspendido no puede quedar abierto.
+        ...(input.decision === "approved" ? { pendingName: null, pendingAddress: null } : {}),
         ...(input.decision === "rejected" ? { isOpen: false } : {}),
       }).where(eq(businesses.id, input.id));
       await sendPushToUser(biz.ownerId, input.decision === "approved"

@@ -102,8 +102,8 @@ describe.skipIf(!enabled)("fotos: tamaño, propiedad y limpieza (MySQL real + S3
       const r = await callerFor(owner).business.createImageUpload({ contentType: "image/jpeg", kind: "product", size: 123_456 });
       const signed = new URL(r.uploadUrl).searchParams.get("X-Amz-SignedHeaders")!.split(";");
       expect(signed).toEqual(expect.arrayContaining(["content-length", "content-type"]));
-      expect(r.imageUrl.startsWith(`${PUBLIC}/${productFolder(bizId)}/`)).toBe(true);
-      expect(r.key.startsWith(`${productFolder(bizId)}/`)).toBe(true);
+      expect(r.imageUrl.startsWith(`${PUBLIC}/staging/${productFolder(bizId)}/`)).toBe(true);
+      expect(r.key.startsWith(`staging/${productFolder(bizId)}/`)).toBe(true);
       expect(r.key.endsWith(".jpg")).toBe(true);
     });
     it("el tamaño es obligatorio y debe ser un entero entre 1 byte y 2 MB", async () => {
@@ -280,7 +280,7 @@ describe.skipIf(!enabled)("fotos: tamaño, propiedad y limpieza (MySQL real + S3
     it("pedir la subida exige modo repartidor, tamaño válido y usa su carpeta", async () => {
       const courier = await mkUser("courier");
       const r = await callerFor(courier).profile.createCourierPhotoUpload({ contentType: "image/webp", size: 80_000 });
-      expect(r.imageUrl.startsWith(`${PUBLIC}/${courierFolder(courier.id)}/`)).toBe(true);
+      expect(r.imageUrl.startsWith(`${PUBLIC}/staging/${courierFolder(courier.id)}/`)).toBe(true);
       expect(new URL(r.uploadUrl).searchParams.get("X-Amz-SignedHeaders")).toContain("content-length");
       expect((await failure(callerFor(courier).profile.createCourierPhotoUpload({ contentType: "image/webp", size: 3 * 1024 * 1024 }))).code).toBe("BAD_REQUEST");
       expect((await failure(callerFor(await mkUser("customer")).profile.createCourierPhotoUpload({ contentType: "image/webp", size: 1000 }))).code).toBe("FORBIDDEN");

@@ -109,6 +109,9 @@ export const businesses = mysqlTable(
     // Los comercios nuevos entran como "pending" y no se muestran hasta que un admin los apruebe.
     approvalStatus: mysqlEnum("approvalStatus", ["pending", "approved", "rejected"]).default("approved").notNull(),
     approvalNote: varchar("approvalNote", { length: 300 }),
+    // Cambios de nombre/dirección de comercios aprobados quedan pendientes hasta revisión administrativa.
+    pendingName: varchar("pendingName", { length: 150 }),
+    pendingAddress: varchar("pendingAddress", { length: 255 }),
     // El dueño marcó el punto exacto de su local en el mapa (tarifa por km, radio y navegación dependen de él)
     locationConfirmed: boolean("locationConfirmed").default(false).notNull(),
     deliveryMinutes: int("deliveryMinutes").default(30).notNull(),
