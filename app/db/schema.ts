@@ -56,7 +56,7 @@ export const customerAddresses = mysqlTable(
   "customer_addresses",
   {
     id: serial("id").primaryKey(),
-    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "cascade" }).notNull(),
     label: varchar("label", { length: 60 }).notNull().default("Casa"),
     address: varchar("address", { length: 300 }).notNull(),
     lat: double("lat").notNull(),
@@ -71,7 +71,7 @@ export type CustomerAddress = typeof customerAddresses.$inferSelect;
 
 export const authTokens = mysqlTable("auth_tokens", {
   id: serial("id").primaryKey(),
-  userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+  userId: bigint("userId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "cascade" }).notNull(),
   tokenHash: varchar("tokenHash", { length: 64 }).notNull().unique(),
   purpose: mysqlEnum("purpose", ["verify_email", "reset_password"]).notNull(),
   expiresAt: timestamp("expiresAt").notNull(),
@@ -88,7 +88,7 @@ export const businesses = mysqlTable(
   "businesses",
   {
     id: serial("id").primaryKey(),
-    ownerId: bigint("ownerId", { mode: "number", unsigned: true }).notNull(),
+    ownerId: bigint("ownerId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "restrict" }).notNull(),
     name: varchar("name", { length: 150 }).notNull(),
     description: text("description"),
     category: varchar("category", { length: 60 }).notNull(),
@@ -133,7 +133,7 @@ export const products = mysqlTable(
   "products",
   {
     id: serial("id").primaryKey(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true })
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).references(() => businesses.id, { onDelete: "cascade" })
       .notNull(),
     name: varchar("name", { length: 150 }).notNull(),
     description: varchar("description", { length: 300 }),
@@ -156,7 +156,7 @@ export const rescuePacks = mysqlTable(
   "rescue_packs",
   {
     id: serial("id").primaryKey(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true })
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).references(() => businesses.id, { onDelete: "cascade" })
       .notNull(),
     title: varchar("title", { length: 150 }).notNull(),
     description: varchar("description", { length: 300 }),
@@ -209,11 +209,11 @@ export const orders = mysqlTable(
     ])
       .default("pending")
       .notNull(),
-    customerId: bigint("customerId", { mode: "number", unsigned: true })
+    customerId: bigint("customerId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "restrict" })
       .notNull(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true })
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).references(() => businesses.id, { onDelete: "restrict" })
       .notNull(),
-    courierId: bigint("courierId", { mode: "number", unsigned: true }),
+    courierId: bigint("courierId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
     subtotal: double("subtotal").notNull(),
     deliveryFee: double("deliveryFee").default(0).notNull(),
     total: double("total").notNull(),
@@ -261,9 +261,9 @@ export const orderItems = mysqlTable(
   "order_items",
   {
     id: serial("id").primaryKey(),
-    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
-    productId: bigint("productId", { mode: "number", unsigned: true }),
-    rescuePackId: bigint("rescuePackId", { mode: "number", unsigned: true }),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).references(() => orders.id, { onDelete: "cascade" }).notNull(),
+    productId: bigint("productId", { mode: "number", unsigned: true }).references(() => products.id, { onDelete: "set null" }),
+    rescuePackId: bigint("rescuePackId", { mode: "number", unsigned: true }).references(() => rescuePacks.id, { onDelete: "set null" }),
     name: varchar("name", { length: 150 }).notNull(),
     unitPrice: double("unitPrice").notNull(),
     quantity: int("quantity").notNull(),
@@ -277,8 +277,8 @@ export type OrderItem = typeof orderItems.$inferSelect;
 // Última ubicación conocida del repartidor por pedido activo.
 // Se conserva un único punto por pedido para no acumular trayectos innecesarios.
 export const courierLocations = mysqlTable("courier_locations", {
-  orderId: bigint("orderId", { mode: "number", unsigned: true }).primaryKey(),
-  courierId: bigint("courierId", { mode: "number", unsigned: true }).notNull(),
+  orderId: bigint("orderId", { mode: "number", unsigned: true }).references(() => orders.id, { onDelete: "cascade" }).primaryKey(),
+  courierId: bigint("courierId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "cascade" }).notNull(),
   lat: double("lat").notNull(),
   lng: double("lng").notNull(),
   accuracy: double("accuracy"),
@@ -292,7 +292,7 @@ export const pushTokens = mysqlTable(
   "push_tokens",
   {
     id: serial("id").primaryKey(),
-    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "cascade" }).notNull(),
     token: varchar("token", { length: 700 }).notNull().unique(),
     platform: mysqlEnum("platform", ["web", "android", "ios"]).default("web").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -309,8 +309,8 @@ export const orderEvents = mysqlTable(
   "order_events",
   {
     id: serial("id").primaryKey(),
-    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
-    actorId: bigint("actorId", { mode: "number", unsigned: true }),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).references(() => orders.id, { onDelete: "cascade" }).notNull(),
+    actorId: bigint("actorId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
     actorRole: varchar("actorRole", { length: 20 }).notNull(), // customer | business | courier | admin | system
     type: varchar("type", { length: 40 }).notNull(), // status:ready, courier_released, expired, admin_cancel...
     detail: varchar("detail", { length: 300 }),
@@ -328,9 +328,9 @@ export const orderMessages = mysqlTable(
   "order_messages",
   {
     id: serial("id").primaryKey(),
-    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
-    courierId: bigint("courierId", { mode: "number", unsigned: true }).notNull(),
-    senderId: bigint("senderId", { mode: "number", unsigned: true }).notNull(),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).references(() => orders.id, { onDelete: "cascade" }).notNull(),
+    courierId: bigint("courierId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "restrict" }).notNull(),
+    senderId: bigint("senderId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "restrict" }).notNull(),
     senderRole: mysqlEnum("senderRole", ["customer", "courier"]).notNull(),
     body: varchar("body", { length: 500 }).notNull(),
     readAt: timestamp("readAt"),
@@ -346,13 +346,13 @@ export const claims = mysqlTable(
   "claims",
   {
     id: serial("id").primaryKey(),
-    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
-    userId: bigint("userId", { mode: "number", unsigned: true }).notNull(),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).references(() => orders.id, { onDelete: "cascade" }).notNull(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "restrict" }).notNull(),
     reporterRole: mysqlEnum("reporterRole", ["customer", "business", "courier"]).notNull(),
     reason: varchar("reason", { length: 500 }).notNull(),
     status: mysqlEnum("status", ["open", "resolved", "rejected"]).default("open").notNull(),
     resolution: varchar("resolution", { length: 500 }),
-    resolvedBy: bigint("resolvedBy", { mode: "number", unsigned: true }),
+    resolvedBy: bigint("resolvedBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     resolvedAt: timestamp("resolvedAt"),
   },
@@ -369,10 +369,10 @@ export const ratings = mysqlTable(
   "ratings",
   {
     id: serial("id").primaryKey(),
-    orderId: bigint("orderId", { mode: "number", unsigned: true }).notNull(),
-    customerId: bigint("customerId", { mode: "number", unsigned: true }).notNull(),
-    businessId: bigint("businessId", { mode: "number", unsigned: true }).notNull(),
-    courierId: bigint("courierId", { mode: "number", unsigned: true }),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).references(() => orders.id, { onDelete: "cascade" }).notNull(),
+    customerId: bigint("customerId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "restrict" }).notNull(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).references(() => businesses.id, { onDelete: "restrict" }).notNull(),
+    courierId: bigint("courierId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
     businessStars: int("businessStars").notNull(), // 1–5
     businessComment: varchar("businessComment", { length: 300 }),
     courierStars: int("courierStars"), // 1–5, solo si hubo repartidor

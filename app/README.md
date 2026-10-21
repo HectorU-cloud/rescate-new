@@ -91,3 +91,24 @@ En una base vacía (instalación nueva) no hace falta nada de esto.
 - Al reemplazar o quitar una foto se borra la anterior del bucket (solo si es propia y nadie más la usa). Las fotos que se suben pero nunca se guardan quedan en el bucket: puedes poner una regla de ciclo de vida en R2 si te preocupa el espacio.
 - El bucket necesita CORS con `PUT` desde tu dominio y `AllowedHeaders: ["content-type"]`.
 - Si alguna vez R2 rechazara las subidas con `SignatureDoesNotMatch`, quita `"content-length"` de `signableHeaders` en `server/lib/image-rules.ts` (el tipo seguirá atado; el tamaño ya se valida al pedir la URL).
+
+## Claves foráneas: actualizar una base que ya tiene datos
+
+La base ahora impide datos inconsistentes (un pedido de un cliente que no existe, un ítem sin pedido…). Reglas de borrado:
+
+- **Se borra en cascada** lo que no tiene sentido sin su dueño: al borrar un pedido, sus ítems, eventos, mensajes, ubicación, reclamos y valoraciones; al borrar un comercio sin pedidos, sus productos y packs; al borrar un usuario sin historial, sus tokens, direcciones y notificaciones.
+- **Se protege el historial**: no se puede borrar un usuario o un comercio que tiene pedidos, mensajes, reclamos o valoraciones.
+- **Se conserva el registro** aunque desaparezca quien lo originó: el pedido queda sin repartidor, el evento sin autor, el ítem sin enlace al producto (con su nombre y precio).
+
+Si tu base ya tiene datos, **antes de `npm run db:push`**:
+
+```bash
+mysqldump -u USUARIO -p NOMBRE_DE_LA_BASE > copia.sql   # 1) copia de seguridad
+npm run db:check                                          # 2) busca datos huérfanos (solo lee)
+```
+
+`db:check` te dice qué filas apuntan a algo que ya no existe y propone una consulta para verlas y otra para arreglarlas según la regla de cada relación. Aplica los arreglos (los de historial se deciden a mano), repite `npm run db:check` hasta que salga en verde y entonces ejecuta `npm run db:push`.
+
+Si ejecutas `db:push` con datos huérfanos falla con el error 1452 y **deja la migración a medias** (no toca tus datos, pero aplica solo parte de las claves). No pasa nada: arregla los datos y vuelve a ejecutarlo, retoma lo que faltó. En una base nueva no hace falta nada de esto.
+
+Al agregar una tabla o columna que apunte a otra, declara su clave foránea con `.references(...)`: el test `server/schema-integrity.test.ts` falla si queda alguna sin proteger.
