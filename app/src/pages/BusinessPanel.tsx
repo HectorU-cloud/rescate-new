@@ -626,9 +626,17 @@ function OrdersTab({ businessId }: { businessId: number }) {
                 </button>
               )}
               {order.type === "delivery" && order.status === "ready" && (
-                <p className="flex-1 rounded-xl bg-brand-soft py-2.5 text-center text-xs font-extrabold text-brand-dark">
-                  Esperando que un repartidor lo tome 🏍️
-                </p>
+                <div className="flex-1 rounded-xl bg-brand-soft px-3 py-2.5 text-center text-xs font-extrabold text-brand-dark">
+                  {order.courierPickupCode ? (
+                    <>
+                      <p>🔐 Código para entregar al repartidor</p>
+                      <p className="mt-1 text-xl tracking-[0.3em]">{order.courierPickupCode}</p>
+                      <p className="mt-1 font-semibold">Confírmalo cuando recoja el pedido.</p>
+                    </>
+                  ) : (
+                    <p>Esperando que un repartidor lo tome 🏍️</p>
+                  )}
+                </div>
               )}
               {(["pending", "accepted"].includes(order.status) || (order.type === "delivery" && ["preparing", "ready"].includes(order.status))) && (
                 <button

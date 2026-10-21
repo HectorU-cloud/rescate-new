@@ -361,7 +361,10 @@ export const ordersRouter = createRouter({
       .orderBy(desc(orders.createdAt));
     const bizRows = await db.select().from(businesses);
     const byId = new Map(bizRows.map((b) => [b.id, b]));
-    return rows.map((o) => ({ order: o, business: byId.get(o.businessId) ?? null }));
+    return rows.map((o) => ({
+      order: { ...o, courierPickupCode: null },
+      business: byId.get(o.businessId) ?? null,
+    }));
   }),
 
   liveLocation: authedQuery
@@ -425,8 +428,12 @@ export const ordersRouter = createRouter({
         const [row] = await db.select().from(users).where(eq(users.id, order.courierId!)).limit(1);
         courier = row ? toPublicCourier(row) : null;
       }
-      // Los códigos (entrega y retiro) solo se revelan al cliente dueño del pedido.
-      const visibleOrder = order.customerId !== ctx.user.id ? { ...order, deliveryConfirmationCode: null, pickupCode: null } : order;
+      // Los códigos del cliente son privados; el código de recogida solo se revela al comercio dueño.
+      const visibleOrder = {
+        ...order,
+        ...(order.customerId !== ctx.user.id ? { deliveryConfirmationCode: null, pickupCode: null } : {}),
+        ...(!ownedBiz ? { courierPickupCode: null } : {}),
+      };
       return { ...data, order: visibleOrder, courier };
     }),
 

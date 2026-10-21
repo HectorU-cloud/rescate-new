@@ -294,6 +294,7 @@ describe.skipIf(!enabled)("seguridad y ubicación (MySQL real)", () => {
       const mine = (await callerFor(courier).courier.myDeliveries()).find((x) => x.order.id === orderId)!.order;
       expect([mine.customerPhone, mine.deliveryAddress, mine.deliveryLat]).toEqual(["0991234567", "Av. Secreta 123 y Calle 9", -2.1391]);
       expect(mine.deliveryConfirmationCode).toBeNull(); // el código sigue siendo solo del cliente
+      expect(mine.courierPickupCode).toBeNull(); // el código de recogida se valida sin entregárselo al repartidor
     });
   });
 

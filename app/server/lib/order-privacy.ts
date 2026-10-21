@@ -18,5 +18,6 @@ export function redactForCourierBoard<T extends Order>(order: T): T {
     notes: null,
     deliveryConfirmationCode: null,
     pickupCode: null,
+    courierPickupCode: null,
   };
 }

@@ -17,6 +17,7 @@ export default function CourierPanel() {
   });
   const utils = trpc.useUtils();
   const [confirmationCodes, setConfirmationCodes] = useState<Record<number, string>>({});
+  const [pickupCodes, setPickupCodes] = useState<Record<number, string>>({});
   const enabled = isAuthenticated && user?.appRole === "courier";
   const available = trpc.courier.available.useQuery(undefined, {
     enabled,
@@ -65,6 +66,15 @@ export default function CourierPanel() {
     },
     onError: (e) => toast.error(e.message),
   });
+  const confirmPickup = trpc.courier.confirmPickup.useMutation({
+    onSuccess: (_result, variables) => {
+      setPickupCodes((current) => ({ ...current, [variables.orderId]: "" }));
+      toast.success("Recogida confirmada. ¡El pedido va en camino!");
+      utils.courier.invalidate();
+      utils.orders.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const availability = trpc.courier.availability.useQuery(undefined, { enabled });
   const setAvailability = trpc.courier.setAvailability.useMutation({
     onSuccess: () => utils.courier.availability.invalidate(),
@@ -104,6 +114,7 @@ export default function CourierPanel() {
     );
   }
 
+  const waitingPickup = (mine.data ?? []).filter((d) => d.order.type === "delivery" && d.order.status === "ready");
   const active = (mine.data ?? []).filter((d) => d.order.status === "picked_up");
   const done = (mine.data ?? []).filter((d) => d.order.status === "delivered");
 
@@ -134,6 +145,63 @@ export default function CourierPanel() {
         <span>{availability.data?.available ? "🟢 Disponible: recibes avisos de pedidos nuevos" : "⚫ No disponible: no recibirás avisos"}</span>
         <span className="text-xs underline">Cambiar</span>
       </button>
+
+      {waitingPickup.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
+            Pedidos por recoger
+          </h2>
+          {waitingPickup.map(({ order, business }) => (
+            <div key={order.id} className="rounded-3xl bg-card p-4 shadow-sm ring-2 ring-brand">
+              <p className="text-sm font-extrabold">{order.code} · {business?.name}</p>
+              <p className="mt-2 rounded-xl bg-secondary px-3 py-2 text-xs font-bold">
+                📤 Recoge en: {business?.address}
+              </p>
+              <p className="mt-1 rounded-xl bg-brand-soft px-3 py-2 text-xs font-bold text-brand-dark">
+                📍 Entrega en: {order.deliveryAddress}
+              </p>
+              <div className="mt-3 rounded-xl bg-secondary p-3">
+                <label htmlFor={`pickup-code-${order.id}`} className="mb-1 block text-xs font-extrabold">
+                  Código que te da el comercio al recoger
+                </label>
+                <input
+                  id={`pickup-code-${order.id}`}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={pickupCodes[order.id] ?? ""}
+                  onChange={(event) => setPickupCodes((current) => ({
+                    ...current,
+                    [order.id]: event.target.value.replace(/\D/g, "").slice(0, 6),
+                  }))}
+                  placeholder="6 dígitos"
+                  className="w-full rounded-xl border border-border bg-card px-3 py-2 text-center text-lg font-extrabold tracking-[0.35em] outline-none focus:ring-2 focus:ring-brand"
+                />
+              </div>
+              {withinMinutes(order.courierAcceptedAt, BUSINESS_RULES.courierReleaseWindowMin) && (
+                <button
+                  disabled={release.isPending}
+                  onClick={() => {
+                    const reason = window.prompt("¿Por qué sueltas este pedido? (mínimo 5 caracteres)");
+                    if (reason === null) return;
+                    release.mutate({ orderId: order.id, reason: reason.trim() });
+                  }}
+                  className="mt-3 w-full rounded-xl border border-destructive py-2.5 text-xs font-extrabold text-destructive disabled:opacity-50"
+                >
+                  Soltar pedido (solo los primeros {BUSINESS_RULES.courierReleaseWindowMin} min)
+                </button>
+              )}
+              <button
+                disabled={confirmPickup.isPending || (pickupCodes[order.id] ?? "").length !== 6}
+                onClick={() => confirmPickup.mutate({ orderId: order.id, pickupCode: pickupCodes[order.id] ?? "" })}
+                className="mt-3 w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50"
+              >
+                {confirmPickup.isPending ? "Verificando código…" : "✔️ Confirmar recogida"}
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* En curso */}
       {active.length > 0 && (

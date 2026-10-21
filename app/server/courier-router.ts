@@ -68,7 +68,7 @@ export const courierRouter = createRouter({
   }),
 
   accept: authedQuery
-    .input(z.object({ orderId: z.number() }))
+    .input(z.object({ orderId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
       if (ctx.user.appRole !== "courier") {
         throw new TRPCError({ code: "FORBIDDEN", message: "Regístrate como repartidor" });
@@ -88,23 +88,73 @@ export const courierRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido ya fue tomado" });
       }
       const [active] = await db.select({ count: sql<number>`count(*)` }).from(orders)
-        .where(and(eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
+        .where(and(eq(orders.courierId, ctx.user.id), inArray(orders.status, ["ready", "picked_up"])));
       if (hasReachedActiveLimit(Number(active?.count ?? 0))) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Ya llevas ${MAX_ACTIVE_DELIVERIES} entregas activas. Termina una antes de tomar otra.` });
       }
-      const deliveryConfirmationCode = String(randomInt(100000, 1000000));
+      const courierPickupCode = order.courierPickupCode ?? String(randomInt(100000, 1000000));
       // La condición del WHERE hace la toma atómica: si dos repartidores pulsan a la vez, solo uno gana.
       const [res] = await db
         .update(orders)
-        .set({ courierId: ctx.user.id, status: "picked_up", deliveryConfirmationCode, codeAttempts: 0, courierAcceptedAt: new Date() })
+        .set({
+          courierId: ctx.user.id,
+          courierAcceptedAt: new Date(),
+          ...(order.courierPickupCode ? {} : { courierPickupCode }),
+        })
         .where(and(eq(orders.id, order.id), eq(orders.status, "ready"), isNull(orders.courierId)));
       if (res.affectedRows === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido ya fue tomado" });
       }
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "courier_accepted" });
-      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "picked_up", type: order.type });
       const [biz] = await db.select().from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
       if (biz) await sendPushToUser(biz.ownerId, { title: "Repartidor asignado 🛵", body: `${courier.name ?? "Un repartidor"} recogerá el pedido ${order.code}.`, url: "/panel", orderId: order.id }).catch(() => undefined);
+      return { ok: true };
+    }),
+
+  confirmPickup: authedQuery
+    .input(z.object({
+      orderId: z.number().int().positive(),
+      pickupCode: z.string().regex(/^\d{6}$/, "Ingresa el código de 6 dígitos"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.user.appRole !== "courier") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Solo un repartidor puede confirmar el retiro" });
+      }
+      const db = getDb();
+      const courier = await db.query.users.findFirst({ where: eq(users.id, ctx.user.id) });
+      if (!courier?.courierApproved) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Tu perfil de repartidor está pendiente de aprobación administrativa." });
+      }
+      const order = await db.query.orders.findFirst({
+        where: and(
+          eq(orders.id, input.orderId),
+          eq(orders.courierId, ctx.user.id),
+          eq(orders.type, "delivery"),
+          eq(orders.status, "ready"),
+        ),
+      });
+      if (!order) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes confirmar este pedido" });
+      }
+      if (!codesMatch(order.courierPickupCode, input.pickupCode)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "El código no coincide. Pídele el código al comercio." });
+      }
+
+      const deliveryConfirmationCode = String(randomInt(100000, 1000000));
+      const [done] = await db.update(orders)
+        .set({ status: "picked_up", deliveryConfirmationCode, codeAttempts: 0 })
+        .where(and(
+          eq(orders.id, order.id),
+          eq(orders.courierId, ctx.user.id),
+          eq(orders.type, "delivery"),
+          eq(orders.status, "ready"),
+        ));
+      if (done.affectedRows === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido cambió de estado" });
+      }
+
+      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "status:picked_up" });
+      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "picked_up", type: order.type });
       return { ok: true };
     }),
 
@@ -115,7 +165,12 @@ export const courierRouter = createRouter({
       if (ctx.user.appRole !== "courier") throw new TRPCError({ code: "FORBIDDEN", message: "Solo un repartidor puede soltar pedidos" });
       const db = getDb();
       const order = await db.query.orders.findFirst({
-        where: and(eq(orders.id, input.orderId), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up"), eq(orders.type, "delivery")),
+        where: and(
+          eq(orders.id, input.orderId),
+          eq(orders.courierId, ctx.user.id),
+          inArray(orders.status, ["ready", "picked_up"]),
+          eq(orders.type, "delivery"),
+        ),
       });
       if (!order) throw new TRPCError({ code: "BAD_REQUEST", message: "No tienes este pedido activo" });
       if (!canCourierRelease(order.courierAcceptedAt)) {
@@ -125,7 +180,7 @@ export const courierRouter = createRouter({
         courierId: null, status: "ready", deliveryConfirmationCode: null, codeAttempts: 0, courierAcceptedAt: null,
         // El plazo para que otro lo tome se reinicia, pero el cliente no espera de más.
         readyAt: new Date(), courierReminderSentAt: null,
-      }).where(and(eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
+      }).where(and(eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, order.status)));
       if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido ya cambió de estado" });
       await db.delete(courierLocations).where(eq(courierLocations.orderId, order.id));
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "courier_released", detail: input.reason });
@@ -170,8 +225,8 @@ export const courierRouter = createRouter({
       byOrder.set(it.orderId, arr);
     }
     return rows.map((o) => ({
-      // El código es secreto del cliente: nunca se devuelve en el panel del repartidor.
-      order: { ...o, deliveryConfirmationCode: null },
+      // Los códigos se entregan verbalmente y nunca se devuelven al repartidor por API.
+      order: { ...o, deliveryConfirmationCode: null, courierPickupCode: null },
       business: byId.get(o.businessId) ?? null,
       items: byOrder.get(o.id) ?? [],
     }));
@@ -249,7 +304,7 @@ export const courierRouter = createRouter({
     const [activeRow] = await db
       .select({ count: sql<number>`count(*)` })
       .from(orders)
-      .where(and(eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
+      .where(and(eq(orders.courierId, ctx.user.id), inArray(orders.status, ["ready", "picked_up"])));
     const [me] = await db.select({ rating: users.courierRating, ratingCount: users.courierRatingCount }).from(users).where(eq(users.id, ctx.user.id)).limit(1);
     return {
       deliveries: Number(row?.deliveries ?? 0),

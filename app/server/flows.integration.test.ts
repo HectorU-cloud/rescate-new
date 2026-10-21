@@ -171,6 +171,21 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
 
   // ------------------------------------------------------------------ toma atómica
   describe("toma de pedidos por repartidores", () => {
+    it("al marcar un delivery como listo genera un código visible solo al comercio", async () => {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const businessId = await mkBusiness(owner.id);
+      const orderId = await mkOrder({ customerId: customer.id, businessId, status: "preparing" });
+
+      await callerFor(owner).business.updateOrderStatus({ orderId, status: "ready" });
+      const order = await getOrder(orderId);
+      expect(order.courierPickupCode).toMatch(/^\d{6}$/);
+      const businessOrder = (await callerFor(owner).business.orders({ activeOnly: true })).find((entry) => entry.order.id === orderId);
+      expect(businessOrder?.order.courierPickupCode).toBe(order.courierPickupCode);
+      const customerOrder = (await callerFor(customer).orders.mine()).find((entry) => entry.order.id === orderId);
+      expect(customerOrder?.order.courierPickupCode).toBeNull();
+    });
+
     it("si dos repartidores lo toman a la vez, solo uno gana", async () => {
       const customer = await mkUser("customer");
       const biz = await mkBusiness((await mkUser("business")).id);
@@ -185,8 +200,31 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect(fulfilled(results)).toBe(1);
       const winner = results[0].status === "fulfilled" ? c1 : c2;
       const order = await getOrder(orderId);
-      expect(order.status).toBe("picked_up");
+      expect(order.status).toBe("ready");
       expect(order.courierId).toBe(winner.id);
+    });
+
+    it("solo pasa a 'en camino' cuando el repartidor confirma el código del comercio", async () => {
+      const customer = await mkUser("customer");
+      const biz = await mkBusiness((await mkUser("business")).id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({
+        customerId: customer.id,
+        businessId: biz,
+        status: "ready",
+        courierPickupCode: "123456",
+      });
+      const c = callerFor(courier);
+
+      await c.courier.accept({ orderId });
+      expect((await getOrder(orderId)).status).toBe("ready");
+      await expect(c.courier.confirmPickup({ orderId, pickupCode: "000000" })).rejects.toThrow(/código no coincide/i);
+      expect((await getOrder(orderId)).status).toBe("ready");
+
+      expect((await c.courier.confirmPickup({ orderId, pickupCode: "123456" })).ok).toBe(true);
+      const order = await getOrder(orderId);
+      expect(order.status).toBe("picked_up");
+      expect(order.deliveryConfirmationCode).toMatch(/^\d{6}$/);
     });
 
     it("un repartidor con 2 entregas activas no puede tomar una tercera", async () => {
@@ -195,6 +233,18 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       const courier = await mkUser("courier");
       for (let i = 0; i < 2; i++) {
         await mkOrder({ customerId: customer.id, businessId: biz, status: "picked_up", courierId: courier.id, courierAcceptedAt: new Date() });
+      }
+      const third = await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date() });
+      await expect(callerFor(courier).courier.accept({ orderId: third })).rejects.toThrow(/entregas activas/);
+      expect((await getOrder(third)).courierId).toBeNull();
+    });
+
+    it("un pedido asignado pero aún no recogido también cuenta como activo", async () => {
+      const customer = await mkUser("customer");
+      const biz = await mkBusiness((await mkUser("business")).id);
+      const courier = await mkUser("courier");
+      for (let i = 0; i < 2; i++) {
+        await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", courierId: courier.id, courierAcceptedAt: new Date() });
       }
       const third = await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date() });
       await expect(callerFor(courier).courier.accept({ orderId: third })).rejects.toThrow(/entregas activas/);
@@ -217,6 +267,23 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect(order.status).toBe("ready");
       expect(order.courierId).toBeNull();
       expect(order.deliveryConfirmationCode).toBeNull();
+    });
+
+    it("también permite soltar un pedido asignado que aún espera el código de retiro", async () => {
+      const customer = await mkUser("customer");
+      const biz = await mkBusiness((await mkUser("business")).id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({
+        customerId: customer.id,
+        businessId: biz,
+        status: "ready",
+        courierId: courier.id,
+        courierAcceptedAt: new Date(),
+        courierPickupCode: "123456",
+      });
+      await callerFor(courier).courier.release({ orderId, reason: "No puedo llegar al local" });
+      const order = await getOrder(orderId);
+      expect([order.status, order.courierId]).toEqual(["ready", null]);
     });
 
     it("pasada la ventana ya no se puede soltar", async () => {

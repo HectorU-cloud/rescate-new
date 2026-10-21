@@ -8,7 +8,7 @@ const order = {
   subtotal: 5, deliveryFee: 1.5, total: 6.5, deliveryDistanceKm: 2.3,
   customerName: "Juan Pérez", customerPhone: "0991234567", deliveryAddress: "Av. Secreta 123 y Calle 9",
   deliveryLat: -2.139, deliveryLng: -79.588, notes: "timbre dañado, casa azul",
-  deliveryConfirmationCode: "123456", pickupCode: "654321",
+  deliveryConfirmationCode: "123456", pickupCode: "654321", courierPickupCode: "135790",
 } as unknown as typeof orders.$inferSelect;
 
 describe("redactForCourierBoard", () => {
@@ -26,6 +26,7 @@ describe("redactForCourierBoard", () => {
   it("no filtra los códigos secretos", () => {
     expect(r.deliveryConfirmationCode).toBeNull();
     expect(r.pickupCode).toBeNull();
+    expect(r.courierPickupCode).toBeNull();
   });
   it("conserva lo necesario para decidir: ganancia, distancia, total a cobrar y estado", () => {
     expect(r).toMatchObject({ id: 7, code: "AR-ABC123", deliveryFee: 1.5, deliveryDistanceKm: 2.3, total: 6.5, status: "ready", businessId: 1 });

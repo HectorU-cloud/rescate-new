@@ -228,6 +228,7 @@ export const orders = mysqlTable(
     deliveryLng: double("deliveryLng"),
     notes: varchar("notes", { length: 300 }),
     pickupCode: varchar("pickupCode", { length: 6 }), // validación de retiro de packs
+    courierPickupCode: varchar("courierPickupCode", { length: 6 }),
     deliveryConfirmationCode: varchar("deliveryConfirmationCode", { length: 6 }), // código privado para confirmar delivery
     customerName: varchar("customerName", { length: 150 }),
     customerPhone: varchar("customerPhone", { length: 30 }),

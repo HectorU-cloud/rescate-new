@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomInt } from "node:crypto";
 import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
@@ -261,7 +262,7 @@ export const businessRouter = createRouter({
         byOrder.set(it.orderId, arr);
       }
       return filtered.map((o) => ({
-        // Los códigos (entrega y retiro) son exclusivos del cliente; el comercio debe pedírselos.
+        // Los códigos del cliente son privados; el comercio recibe su código para entregar al repartidor.
         order: { ...o, deliveryConfirmationCode: null, pickupCode: null, needsPickupCode: o.type === "rescue" && !!o.pickupCode },
         items: byOrder.get(o.id) ?? [],
       }));
@@ -297,6 +298,9 @@ export const businessRouter = createRouter({
       if (next === "cancelled") {
         if (!canBusinessCancel(order.type, order.status)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido ya no se puede cancelar desde el local" });
+        }
+        if (order.type === "delivery" && order.courierId != null) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Un repartidor ya tomó este pedido y no se puede cancelar desde el local" });
         }
         if (businessCancelNeedsReason(order.status) && (input.reason?.length ?? 0) < MIN_CANCEL_REASON_LENGTH) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Indica el motivo de la cancelación (el cliente lo verá)" });
@@ -336,6 +340,9 @@ export const businessRouter = createRouter({
         status: next,
         businessReminderSentAt: null,
         ...(next === "ready" ? { readyAt: new Date(), courierReminderSentAt: null } : {}),
+        ...(next === "ready" && order.type === "delivery" && !order.courierPickupCode
+          ? { courierPickupCode: String(randomInt(100000, 1000000)) }
+          : {}),
         ...(next === "delivered" ? { deliveredAt: new Date() } : {}),
       }).where(and(eq(orders.id, order.id), eq(orders.status, order.status))); // evita carreras con cancelaciones
       if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido cambió de estado. Actualiza la pantalla." });

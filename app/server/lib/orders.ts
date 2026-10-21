@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { getDb } from "../queries/connection";
 import { orderItems, orders, rescuePacks, type OrderStatus } from "@db/schema";
@@ -18,7 +18,11 @@ export async function cancelOrderAndRestock(
     const [res] = await tx
       .update(orders)
       .set({ status: "cancelled", cancelledBy: meta.by ?? null, cancelReason: meta.reason?.slice(0, 300) ?? null })
-      .where(and(eq(orders.id, orderId), inArray(orders.status, allowedFrom)));
+      .where(and(
+        eq(orders.id, orderId),
+        inArray(orders.status, allowedFrom),
+        ...(allowedFrom.includes("ready") ? [isNull(orders.courierId)] : []),
+      ));
     if (res.affectedRows === 0) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Ya no se puede cancelar" });
     }
