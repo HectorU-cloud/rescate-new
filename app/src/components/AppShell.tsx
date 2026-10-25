@@ -80,7 +80,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-dvh bg-background">
       {/* Cabecera */}
       <header className="sticky top-0 z-40 border-b border-border/70 bg-background/90 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
+        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
           <Logo />
           <nav className="hidden items-center gap-1 md:flex">
             {items.map((it) => (
@@ -140,7 +140,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </header>
 
       {/* Contenido */}
-      <main className="mx-auto w-full max-w-5xl px-4 pb-32 pt-4 md:pb-16">
+      <main className="mx-auto w-full max-w-6xl px-4 pb-32 pt-5 sm:px-6 md:pb-16 md:pt-7">
         {children}
       </main>
 

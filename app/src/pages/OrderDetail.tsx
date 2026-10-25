@@ -1,6 +1,7 @@
-import { useParams } from "react-router";
+import { useParams, useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/hooks/useCart";
 import { LOGIN_PATH } from "@/const";
 import { StatusTimeline } from "@/components/StatusTimeline";
 import { ChatBox } from "@/components/ChatBox";
@@ -13,6 +14,8 @@ import { toast } from "sonner";
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { add } = useCart();
   const orderId = Number(id);
   const { user, isAuthenticated } = useAuth({
     redirectOnUnauthenticated: true,
@@ -28,6 +31,11 @@ export default function OrderDetail() {
           ? false
           : 8_000,
     },
+  );
+  // Se consulta únicamente cuando el usuario solicita repetir un pedido.
+  const repeatCatalog = trpc.catalog.businessDetail.useQuery(
+    { id: detail.data?.order.businessId ?? 1 },
+    { enabled: false, retry: false },
   );
   const liveLocation = trpc.orders.liveLocation.useQuery(
     { id: orderId },
@@ -73,6 +81,49 @@ export default function OrderDetail() {
 
   const { order, items, business, courier } = detail.data;
   const isActive = !["delivered", "cancelled"].includes(order.status);
+
+  const repeatOrder = async () => {
+    if (order.type !== "delivery") {
+      toast.info("La repetición automática está disponible para pedidos a domicilio.");
+      return;
+    }
+    try {
+      const result = await repeatCatalog.refetch();
+      const catalog = result.data;
+      if (!catalog?.business?.openNow) {
+        toast.error("Este local está cerrado. Intenta repetir el pedido cuando abra.");
+        return;
+      }
+      const available = new Map(
+        (catalog.products ?? []).filter((product) => product.isAvailable).map((product) => [product.id, product]),
+      );
+      const repeatable = items.flatMap((item) => {
+        const product = item.productId == null ? undefined : available.get(item.productId);
+        return product ? [{ product, quantity: item.quantity }] : [];
+      });
+      if (repeatable.length === 0) {
+        toast.error("Ningún producto de este pedido sigue disponible.");
+        return;
+      }
+      repeatable.forEach(({ product, quantity }) => {
+        for (let count = 0; count < Math.min(quantity, 50); count += 1) {
+          add(
+            { id: catalog.business.id, name: catalog.business.name, deliveryFee: catalog.business.deliveryFee },
+            { productId: product.id, name: product.name, price: product.price, emoji: product.emoji },
+          );
+        }
+      });
+      const skipped = items.length - repeatable.length;
+      toast.success(
+        skipped > 0
+          ? `Pedido preparado. ${skipped} producto(s) agotado(s) se omitieron.`
+          : "Pedido anterior añadido al carrito.",
+      );
+      navigate("/carrito");
+    } catch {
+      toast.error("No se pudo consultar la disponibilidad. Inténtalo de nuevo.");
+    }
+  };
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -255,6 +306,16 @@ export default function OrderDetail() {
           Cancelado {order.cancelledBy === "customer" ? "por ti" : order.cancelledBy === "business" ? "por el local" : order.cancelledBy === "admin" ? "por soporte" : "automáticamente"}
           {order.cancelReason ? `: ${order.cancelReason}` : "."}
         </p>
+      )}
+      {order.customerId === user?.id && order.type === "delivery" && order.status === "delivered" && (
+        <button
+          type="button"
+          onClick={repeatOrder}
+          disabled={repeatCatalog.isFetching}
+          className="w-full rounded-2xl bg-brand py-3.5 text-sm font-extrabold text-white shadow-sm transition hover:brightness-95 disabled:opacity-60"
+        >
+          {repeatCatalog.isFetching ? "Comprobando disponibilidad…" : "↻ Repetir pedido"}
+        </button>
       )}
       {order.customerId === user?.id && order.status === "delivered" && (
         <RatingBox orderId={order.id} businessName={business?.name} hasCourier={!!order.courierId} />

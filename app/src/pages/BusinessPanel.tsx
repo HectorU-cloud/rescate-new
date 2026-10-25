@@ -784,7 +784,7 @@ function MenuTab() {
         <textarea
           value={form.description}
           onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-          placeholder="Descripción e ingredientes (ej. pan, carne, queso, lechuga, tomate y salsa de la casa). Indica alérgenos si aplica."
+          placeholder="Descripción breve. Ingredientes: pan, carne, queso, lechuga y salsa. Indica alérgenos si aplica."
           maxLength={300}
           rows={3}
           className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none"

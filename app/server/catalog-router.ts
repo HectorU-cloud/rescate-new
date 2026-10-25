@@ -87,7 +87,15 @@ export const catalogRouter = createRouter({
     const bizRows = await db.select().from(businesses);
     const byId = new Map(bizRows.map((b) => [b.id, b]));
     return packs
-      .map((p) => ({ pack: withReservable(p), business: byId.get(p.businessId) ?? null }))
-      .filter((r) => r.business !== null && isBusinessPublic(r.business));
+      .map((p) => {
+        const business = byId.get(p.businessId) ?? null;
+        return {
+          pack: withReservable(p),
+          business: business ? withOpenNow(business) : null,
+        };
+      })
+      .filter((r) => r.business !== null && isBusinessPublic(r.business))
+      // Primero los comercios abiertos; después, los que están cerrados.
+      .sort((a, b) => Number(b.business!.openNow) - Number(a.business!.openNow));
   }),
 });

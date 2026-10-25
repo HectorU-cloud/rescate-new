@@ -126,30 +126,52 @@ export default function BusinessDetail() {
 
       {/* Menú */}
       {tab === "menu" && (
-        <section className="space-y-2">
-          {products.map((p) => (
-            <div
+        <section className="space-y-3">
+          <div className="flex items-end justify-between gap-3 px-1">
+            <div>
+              <h2 className="font-display text-lg font-extrabold">Menú del local</h2>
+              <p className="text-xs font-medium text-muted-foreground">{products.length} producto{products.length === 1 ? "" : "s"} disponible{products.length === 1 ? "" : "s"}</p>
+            </div>
+            <span className="rounded-full bg-brand/10 px-3 py-1 text-xs font-extrabold text-brand-dark">Actualizado</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+          {products.map((p) => {
+            const description = p.description?.trim() ?? "";
+            const ingredientMatch = description.match(/(?:ingredientes|contiene)\s*:\s*(.*)/i);
+            const ingredients = ingredientMatch?.[1]?.trim();
+            const productDescription = ingredients
+              ? description.slice(0, ingredientMatch!.index).replace(/[·|,;\s]+$/, "").trim()
+              : description;
+            return (
+            <article
               key={p.id}
-              className="flex items-center gap-3 rounded-2xl bg-card p-3 shadow-sm ring-1 ring-border"
+              className="group overflow-hidden rounded-3xl bg-card shadow-sm ring-1 ring-border transition hover:-translate-y-0.5 hover:shadow-md"
             >
-              {p.imageUrl ? (
-                <img src={p.imageUrl} alt={p.name} loading="lazy" className="h-16 w-16 shrink-0 rounded-xl object-cover" />
-              ) : (
-                <div className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-secondary text-3xl">
-                  {p.emoji}
+              <div className="relative h-36 overflow-hidden bg-gradient-to-br from-brand-soft to-secondary sm:h-40">
+                {p.imageUrl ? (
+                  <img src={p.imageUrl} alt={p.name} loading="lazy" className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
+                ) : (
+                  <div className="grid h-full w-full place-items-center text-6xl">{p.emoji}</div>
+                )}
+                <span className="absolute left-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-extrabold text-brand-dark shadow-sm">Disponible</span>
+              </div>
+              <div className="p-3.5">
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-display text-base font-extrabold leading-tight">{p.name}</p>
+                    {productDescription && (
+                      <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{productDescription}</p>
+                    )}
+                  </div>
+                  <p className="font-display shrink-0 text-base font-extrabold text-brand-dark">{money(p.price)}</p>
                 </div>
-              )}
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-extrabold">{p.name}</p>
-                {p.description && (
-                  <p className="line-clamp-2 text-xs text-muted-foreground">
-                    {p.description}
+                {ingredients && (
+                  <p className="mt-2 rounded-xl bg-secondary/70 px-2.5 py-2 text-[11px] leading-relaxed text-foreground/80">
+                    <span className="font-extrabold">Ingredientes: </span>{ingredients}
                   </p>
                 )}
-                <p className="font-display mt-0.5 text-sm font-extrabold text-brand-dark">
-                  {money(p.price)}
-                </p>
-              </div>
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/70 pt-3">
+                  <span className="text-[11px] font-semibold text-muted-foreground">Precio por unidad</span>
               <button
                 disabled={!business.openNow}
                 onClick={() => {
@@ -173,8 +195,11 @@ export default function BusinessDetail() {
               >
                 +
               </button>
-            </div>
-          ))}
+                </div>
+              </div>
+            </article>
+          );})}
+          </div>
           {products.length === 0 && (
             <p className="rounded-2xl bg-card p-6 text-center text-sm font-semibold text-muted-foreground ring-1 ring-border">
               Este local aún no publicó su menú
