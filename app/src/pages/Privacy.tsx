@@ -52,7 +52,7 @@ export default function Privacy() {
       <p>Compartimos datos solo con quien interviene en tu pedido y con proveedores que nos prestan servicios:</p>
       <ul>
         <li><b>Comercio y repartidor</b> del pedido, con la información necesaria para cumplirlo.</li>
-        <li><b>Proveedores tecnológicos:</b> alojamiento de la aplicación y la base de datos (Vercel y Railway), almacenamiento de imágenes (Cloudflare R2 o Amazon S3), notificaciones push (Google Firebase), inicio de sesión (Google), envío de correos (Resend) y mapas (proveedor de teselas configurado).</li>
+        <li><b>Proveedores tecnológicos:</b> alojamiento de la aplicación y la base de datos (Vercel y Railway), almacenamiento de imágenes (Cloudflare R2 o Amazon S3), notificaciones push (Google Firebase), inicio de sesión (Google), envío de correos (Resend), monitoreo de errores (Sentry, solo mensajes técnicos sin tus datos de contacto) y mapas (proveedor de teselas configurado).</li>
         <li><b>Autoridades</b>, cuando una ley o una orden válida lo exija.</li>
       </ul>
       <p>Algunos de estos proveedores están fuera del Ecuador; trabajamos con ellos bajo sus condiciones de protección de datos.</p>

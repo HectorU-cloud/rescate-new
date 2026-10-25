@@ -35,6 +35,9 @@ export const env = {
   trustedProxyHops,
   // Registra en el log las primeras peticiones con la cabecera X-Forwarded-For y la IP detectada (para fijar TRUSTED_PROXY_HOPS)
   debugClientIp: process.env.DEBUG_CLIENT_IP === "true",
+  // Reporte de errores a Sentry (opcional). Vacío = desactivado. Ver contracts/monitoring.ts.
+  sentryDsn: (process.env.SENTRY_DSN ?? "").trim(),
+  sentryEnvironment: process.env.SENTRY_ENVIRONMENT || (isProduction ? "production" : "development"),
   resendApiKey: process.env.RESEND_API_KEY ?? "",
   authEmailFrom: process.env.AUTH_EMAIL_FROM ?? "Al Rescate <noreply@example.com>",
   // Almacenamiento compatible con S3 (AWS S3 o Cloudflare R2).

@@ -3,6 +3,7 @@ import { BUSINESS_RULES } from "@contracts/constants";
 import { getDb } from "../queries/connection";
 import { businesses, orders, type OrderStatus } from "@db/schema";
 import { cancelOrderAndRestock, releaseOrderFromCourier } from "./orders";
+import { reportError } from "./monitoring";
 import { logOrderEvent } from "./order-events";
 import { notifyBusinessStalled, notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser } from "./push-notifications";
 
@@ -124,6 +125,7 @@ export async function sweepOrders() {
     }
   } catch (error) {
     console.error("[maintenance] Error revisando pedidos vencidos:", error);
+    reportError(error, { source: "maintenance" });
   } finally {
     running = false;
   }

@@ -152,3 +152,9 @@ Al agregar una tabla o columna que apunte a otra, declara su clave foránea con 
 - Quien llame directo al dominio de Railway puede falsear su IP. El límite por correo sigue protegiendo cada cuenta; para cerrar del todo ese hueco habría que poner un dominio propio con Cloudflare delante de Railway y aceptar solo su tráfico.
 - `APP_URL` es obligatoria en producción (HTTPS, sin ruta) y debe ser el dominio que ven los usuarios (el de Vercel o el tuyo), no el de Railway; la app no arranca si falta.
 - `vercel.json` define los encabezados de seguridad (anti-iframe, tipo de contenido, referrer, HSTS, permisos).
+
+## Monitoreo y alertas
+
+- **Errores (Sentry):** crea dos proyectos en sentry.io (uno "Browser JavaScript" y otro "Node.js"), copia sus DSN y configúralos: `SENTRY_DSN` en Railway y `VITE_SENTRY_DSN` en Vercel (esta última se lee al compilar: vuelve a desplegar). Se reportan los errores 500 del servidor (tRPC y rutas), las excepciones que tumban el proceso, los fallos de la tarea de mantenimiento y los errores del navegador (con una pantalla de aviso en vez de la pantalla en blanco). Es un reportero ligero sin dependencias (`contracts/monitoring.ts`): no incluye sourcemaps ni breadcrumbs, y tapa los correos que aparezcan en mensajes.
+- **Disponibilidad:** `GET /api/health` responde 200 `{"ok":true}` si la base contesta y 503 si no. Apunta un monitor gratuito (UptimeRobot, Better Stack) a `https://TU-DOMINIO/api/health` cada 5 minutos con aviso a tu correo; así vigila Vercel, Railway y la base a la vez.
+- **Respaldos:** activa los backups automáticos del servicio MySQL en Railway y haz un `mysqldump` manual antes de cada migración.
