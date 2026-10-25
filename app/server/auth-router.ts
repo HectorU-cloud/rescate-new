@@ -5,6 +5,7 @@ import { getDb } from "./queries/connection";
 import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
 import { createRouter, authedQuery } from "./middleware";
+import { toSafeUser } from "./lib/safe-user";
 
 function clearSessionCookie(headers: Headers, resHeaders: Headers) {
   const opts = getSessionCookieOptions(headers);
@@ -21,7 +22,8 @@ function clearSessionCookie(headers: Headers, resHeaders: Headers) {
 }
 
 export const authRouter = createRouter({
-  me: authedQuery.query((opts) => opts.ctx.user),
+  // Solo datos seguros: nunca el hash de la contraseña ni la versión de sesión
+  me: authedQuery.query((opts) => toSafeUser(opts.ctx.user)),
   logout: authedQuery.mutation(async ({ ctx }) => {
     clearSessionCookie(ctx.req.headers, ctx.resHeaders);
     return { success: true };

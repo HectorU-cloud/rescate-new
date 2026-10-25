@@ -1391,4 +1391,77 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect(await callerFor(await mkUser("customer")).catalog.businesses({ query: `${tag}-pend` })).toEqual([]);
     });
   });
+
+  // ------------------------------------------------------------------ datos que NO deben salir por la API
+  describe("privacidad de los datos expuestos", () => {
+    const HIDDEN_BIZ = ["ownerId", "approvalNote", "pendingName", "pendingAddress"];
+    const hasNone = (obj: object | null | undefined, keys: string[]) => keys.every((k) => !(k in (obj ?? {})));
+
+    it("auth.me devuelve la cuenta sin hash de contraseña, versión de sesión ni identificador interno", async () => {
+      const user = await mkUser("customer");
+      await db.update(S.users).set({ passwordHash: "scrypt:aa:bb", sessionVersion: 4 }).where(eq(S.users.id, user.id));
+      const [fresh] = await db.select().from(S.users).where(eq(S.users.id, user.id));
+      const me = await callerFor(fresh).auth.me();
+      expect(hasNone(me, ["passwordHash", "sessionVersion", "unionId"])).toBe(true);
+      expect(JSON.stringify(me)).not.toContain("scrypt:");
+      expect([me.id, me.role, me.appRole]).toEqual([user.id, "user", "customer"]);
+    });
+
+    async function setupBizWithPending() {
+      const owner = await mkUser("business");
+      const name = `${tag}-priv local`;
+      const biz = await mkBusiness(owner.id, {
+        name, opensAt: "00:00", closesAt: "00:00",
+        pendingName: "Nombre pendiente de revisión", pendingAddress: "Dirección pendiente", approvalNote: "Nota interna del admin",
+      });
+      return { owner, biz, name };
+    }
+
+    it("el catálogo público no muestra al dueño, la nota interna ni los cambios pendientes de un local", async () => {
+      const { biz, name } = await setupBizWithPending();
+      const customer = await mkUser("customer");
+      const list = await callerFor(customer).catalog.businesses({ query: name });
+      expect(list).toHaveLength(1);
+      expect(hasNone(list[0], HIDDEN_BIZ)).toBe(true);
+      expect(list[0].name).toBe(name); // lo demás sigue ahí
+      const detail = await callerFor(customer).catalog.businessDetail({ id: biz });
+      expect(hasNone(detail!.business, HIDDEN_BIZ)).toBe(true);
+      const raw = JSON.stringify([list, detail]);
+      expect(raw).not.toContain("Nombre pendiente de revisión");
+      expect(raw).not.toContain("Nota interna del admin");
+    });
+
+    it("el cliente tampoco los ve en su pedido ni en su lista de pedidos", async () => {
+      const { biz } = await setupBizWithPending();
+      const customer = await mkUser("customer");
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status: "preparing" });
+      const detail = await callerFor(customer).orders.byId({ id: orderId });
+      expect(hasNone(detail!.business, HIDDEN_BIZ)).toBe(true);
+      const mine = await callerFor(customer).orders.mine();
+      const row = mine.find((r) => r.order.id === orderId)!;
+      expect(hasNone(row.business, HIDDEN_BIZ)).toBe(true);
+      expect(row.business?.name).toContain("priv local");
+    });
+
+    it("el repartidor tampoco los ve en el tablero de disponibles ni en sus entregas", async () => {
+      const { biz } = await setupBizWithPending();
+      const customer = await mkUser("customer");
+      const courier = await mkUser("courier");
+      const available = await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date() });
+      const mineId = await mkOrder({ customerId: customer.id, businessId: biz, status: "picked_up", courierId: courier.id, courierAcceptedAt: new Date() });
+      const board = await callerFor(courier).courier.available();
+      const boardRow = board.find((r) => r.order.id === available)!;
+      expect(hasNone(boardRow.business, HIDDEN_BIZ)).toBe(true);
+      const mineList = await callerFor(courier).courier.myDeliveries();
+      const mineRow = mineList.find((r) => r.order.id === mineId)!;
+      expect(hasNone(mineRow.business, HIDDEN_BIZ)).toBe(true);
+    });
+
+    it("el dueño del local SÍ sigue viendo su propio registro completo en su panel", async () => {
+      const { owner } = await setupBizWithPending();
+      const mine = await callerFor(owner).business.myBusiness();
+      expect(mine?.pendingName).toBe("Nombre pendiente de revisión");
+      expect(mine?.approvalNote).toBe("Nota interna del admin");
+    });
+  });
 });

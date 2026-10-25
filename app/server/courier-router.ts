@@ -6,6 +6,7 @@ import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
 import { releaseOrderFromCourier } from "./lib/orders";
+import { loadBusinessesByIds } from "./lib/business-queries";
 import { logOrderEvent } from "./lib/order-events";
 import { redactForCourierBoard } from "./lib/order-privacy";
 import { codesMatch } from "./lib/codes";
@@ -62,8 +63,7 @@ export const courierRouter = createRouter({
         ),
       )
       .orderBy(desc(orders.createdAt));
-    const bizRows = await db.select().from(businesses);
-    const byId = new Map(bizRows.map((b) => [b.id, b]));
+    const byId = await loadBusinessesByIds(rows.map((o) => o.businessId));
     // Antes de aceptar no se revelan datos del cliente (teléfono, dirección, coordenadas, notas).
     return rows.map((o) => ({ order: redactForCourierBoard(o), business: byId.get(o.businessId) ?? null }));
   }),
@@ -244,8 +244,7 @@ export const courierRouter = createRouter({
       .from(orders)
       .where(eq(orders.courierId, ctx.user.id))
       .orderBy(desc(orders.createdAt));
-    const bizRows = await db.select().from(businesses);
-    const byId = new Map(bizRows.map((b) => [b.id, b]));
+    const byId = await loadBusinessesByIds(rows.map((o) => o.businessId));
     const ids = rows.map((o) => o.id);
     const items =
       ids.length > 0

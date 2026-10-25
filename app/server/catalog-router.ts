@@ -5,6 +5,8 @@ import { getDb } from "./queries/connection";
 import { businesses, products, rescuePacks } from "@db/schema";
 import { isBusinessOpenNow, isBusinessPublic, isPackReservable } from "./lib/business-rules";
 import { isPackExpired } from "@contracts/packs";
+import { loadBusinessesByIds } from "./lib/business-queries";
+import { toPublicBusiness } from "./lib/public-business";
 
 // Reservable = no venció (fecha) y estamos dentro de su ventana horaria diaria.
 const withReservable = <T extends { pickupStart: string; pickupEnd: string; expiresAt: Date | null }>(p: T) => ({
@@ -42,6 +44,7 @@ export const catalogRouter = createRouter({
         );
       }
       return out
+        .map(toPublicBusiness)
         .map(withOpenNow)
         // Prioriza locales abiertos; dentro de cada grupo mantiene el rating descendente.
         .sort((a, b) => Number(b.openNow) - Number(a.openNow) || b.rating - a.rating);
@@ -73,7 +76,7 @@ export const catalogRouter = createRouter({
             gt(rescuePacks.expiresAt, new Date()), // los vencidos (o sin fecha) no se muestran
           ),
         );
-      return { business: withOpenNow(business), products: prods, rescuePacks: packs.map(withReservable) };
+      return { business: withOpenNow(toPublicBusiness(business)), products: prods, rescuePacks: packs.map(withReservable) };
     }),
 
   // Todos los packs de rescate activos (sección "Rescate")
@@ -84,8 +87,7 @@ export const catalogRouter = createRouter({
       .from(rescuePacks)
       .where(and(eq(rescuePacks.isActive, true), gt(rescuePacks.quantityLeft, 0), gt(rescuePacks.expiresAt, new Date())))
       .orderBy(desc(rescuePacks.createdAt));
-    const bizRows = await db.select().from(businesses);
-    const byId = new Map(bizRows.map((b) => [b.id, b]));
+    const byId = await loadBusinessesByIds(packs.map((p) => p.businessId));
     return packs
       .map((p) => {
         const business = byId.get(p.businessId) ?? null;

@@ -6,6 +6,8 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { assertCustomerCanOrder } from "./lib/order-limits";
+import { loadBusinessesByIds } from "./lib/business-queries";
+import { toPublicBusiness } from "./lib/public-business";
 import { isPackExpired } from "@contracts/packs";
 import { notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
 import { isBusinessOpenNow, isBusinessPublic, isPackReservable, quoteDelivery } from "./lib/business-rules";
@@ -51,7 +53,8 @@ async function loadOrderWithRelations(orderId: number) {
   const business = await db.query.businesses.findFirst({
     where: eq(businesses.id, order.businessId),
   });
-  return { order, items, business: business ?? null };
+  // El cliente y el repartidor no necesitan (ni deben ver) al dueño, la nota de moderación ni los cambios pendientes
+  return { order, items, business: business ? toPublicBusiness(business) : null };
 }
 
 export const ordersRouter = createRouter({
@@ -359,8 +362,7 @@ export const ordersRouter = createRouter({
       .from(orders)
       .where(eq(orders.customerId, ctx.user.id))
       .orderBy(desc(orders.createdAt));
-    const bizRows = await db.select().from(businesses);
-    const byId = new Map(bizRows.map((b) => [b.id, b]));
+    const byId = await loadBusinessesByIds(rows.map((o) => o.businessId));
     return rows.map((o) => ({
       order: { ...o, courierPickupCode: null },
       business: byId.get(o.businessId) ?? null,
