@@ -1,3 +1,5 @@
+import { useDialogs } from "@/providers/dialogs";
+import { StaticMap } from "@/components/StaticMap";
 import { useParams, useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
@@ -44,6 +46,7 @@ export default function OrderDetail() {
       refetchInterval: 8_000,
     },
   );
+  const dialogs = useDialogs();
   const cancel = trpc.orders.cancel.useMutation({
     onSuccess: () => {
       toast.success("Pedido cancelado");
@@ -80,6 +83,11 @@ export default function OrderDetail() {
   }
 
   const { order, items, business, courier } = detail.data;
+  // Punto que muestra el mapa: el GPS del repartidor si está fresco; si no, el local.
+  const live = liveLocation.data && !liveLocation.data.stale ? liveLocation.data : null;
+  const mapPoint = live
+    ? { lat: live.lat, lng: live.lng, live: true }
+    : { lat: business?.lat ?? MILAGRO.lat, lng: business?.lng ?? MILAGRO.lng, live: false };
   const isActive = !["delivered", "cancelled"].includes(order.status);
   const orderFlow = order.type === "delivery" ? DELIVERY_FLOW : RESCUE_FLOW;
   const currentStep = orderFlow.indexOf(order.status as OrderStatusKey);
@@ -275,10 +283,12 @@ export default function OrderDetail() {
         {order.type === "delivery" &&
           ["ready", "picked_up"].includes(order.status) && (
             <div className="mt-4 overflow-hidden rounded-2xl ring-1 ring-border">
-              <iframe
-                title={liveLocation.data && !liveLocation.data.stale ? "Ubicación GPS del repartidor" : "Mapa del local"}
+              <StaticMap
+                lat={mapPoint.lat}
+                lng={mapPoint.lng}
+                emoji={mapPoint.live ? "🛵" : "🏪"}
+                label={mapPoint.live ? "Ubicación GPS del repartidor" : "Mapa del local"}
                 className="h-56 w-full sm:h-64"
-                src={`https://www.openstreetmap.org/export/embed.html?bbox=${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng) - 0.015}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat) - 0.012}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng) + 0.015}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat) + 0.012}&layer=mapnik&marker=${liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat}%2C${liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng}`}
               />
               <p className="bg-secondary px-3 py-2 text-[11px] font-bold text-muted-foreground">
                 {liveLocation.data && !liveLocation.data.stale
@@ -332,7 +342,7 @@ export default function OrderDetail() {
       {["pending", "accepted"].includes(order.status) && (
         <button
           onClick={() => {
-            if (window.confirm("¿Seguro que quieres cancelar este pedido?")) cancel.mutate({ id: order.id });
+            void dialogs.confirm({ title: "¿Seguro que quieres cancelar este pedido?", confirmLabel: "Sí, cancelar" }).then((ok) => { if (ok) cancel.mutate({ id: order.id }); });
           }}
           disabled={cancel.isPending}
           className="w-full rounded-2xl bg-card py-3.5 text-sm font-extrabold text-destructive ring-1 ring-border"

@@ -1,3 +1,4 @@
+import { useDialogs } from "@/providers/dialogs";
 import { useState } from "react";
 import { Link, Navigate } from "react-router";
 import { trpc } from "@/providers/trpc";
@@ -174,6 +175,7 @@ function BusinessesTab() {
   const utils = trpc.useUtils();
   const [status, setStatus] = useState<"pending" | "approved" | "rejected">("pending");
   const list = trpc.admin.businesses.useQuery({ status });
+  const dialogs = useDialogs();
   const review = trpc.admin.reviewBusiness.useMutation({
     onSuccess: () => {
       toast.success("Comercio actualizado");
@@ -235,10 +237,10 @@ function BusinessesTab() {
             {(b.approvalStatus !== "rejected" || Boolean(b.pendingName || b.pendingAddress)) && (
               <button
                 disabled={review.isPending}
-                onClick={() => {
-                  const note = window.prompt("Motivo (lo verá el comercio):");
-                  if (!note?.trim()) return;
-                  review.mutate({ id: b.id, decision: "rejected", note: note.trim() });
+                onClick={async () => {
+                  const note = await dialogs.prompt({ title: "Motivo", description: "Lo verá el comercio.", placeholder: "Motivo", confirmLabel: "Enviar" });
+                  if (!note) return;
+                  review.mutate({ id: b.id, decision: "rejected", note });
                 }}
                 className="flex-1 rounded-xl border border-destructive py-2.5 text-sm font-extrabold text-destructive disabled:opacity-50"
               >
@@ -266,6 +268,7 @@ function OrdersTab() {
     { refetchInterval: 20_000 },
   );
   const timeline = trpc.admin.orderTimeline.useQuery({ orderId: openId ?? 0 }, { enabled: openId !== null });
+  const dialogs = useDialogs();
   const cancel = trpc.admin.cancelOrder.useMutation({
     onSuccess: () => {
       toast.success("Pedido cancelado");
@@ -313,10 +316,10 @@ function OrdersTab() {
               {!closed && (
                 <button
                   disabled={cancel.isPending}
-                  onClick={() => {
-                    const reason = window.prompt("Motivo de la cancelación (lo verá el cliente):");
-                    if (!reason || reason.trim().length < 5) return;
-                    cancel.mutate({ orderId: o.id, reason: reason.trim() });
+                  onClick={async () => {
+                    const reason = await dialogs.prompt({ title: "Cancelar pedido", description: "Lo verá el cliente.", placeholder: "Motivo (mínimo 5 caracteres)", minLength: 5, confirmLabel: "Cancelar pedido" });
+                    if (!reason) return;
+                    cancel.mutate({ orderId: o.id, reason });
                   }}
                   className="rounded-xl border border-destructive px-3 py-2 text-destructive disabled:opacity-50"
                 >
@@ -348,6 +351,7 @@ function ClaimsTab() {
   const utils = trpc.useUtils();
   const [status, setStatus] = useState<"open" | "resolved" | "rejected">("open");
   const list = trpc.admin.claims.useQuery({ status });
+  const dialogs = useDialogs();
   const resolve = trpc.admin.resolveClaim.useMutation({
     onSuccess: () => {
       toast.success("Reclamo respondido");
@@ -357,12 +361,16 @@ function ClaimsTab() {
     onError: (e) => toast.error(e.message),
   });
 
-  const answer = (id: number, decision: "resolved" | "rejected") => {
-    const resolution = window.prompt(
-      decision === "resolved" ? "Respuesta para quien reclamó (qué se hará):" : "Motivo del rechazo (lo verá quien reclamó):",
-    );
-    if (!resolution || resolution.trim().length < 5) return;
-    resolve.mutate({ id, decision, resolution: resolution.trim() });
+  const answer = async (id: number, decision: "resolved" | "rejected") => {
+    const resolution = await dialogs.prompt({
+      title: decision === "resolved" ? "Responder reclamo" : "Rechazar reclamo",
+      description: decision === "resolved" ? "Respuesta para quien reclamó (qué se hará)." : "Motivo del rechazo (lo verá quien reclamó).",
+      placeholder: "Mínimo 5 caracteres",
+      minLength: 5,
+      confirmLabel: decision === "resolved" ? "Responder" : "Rechazar",
+    });
+    if (!resolution) return;
+    resolve.mutate({ id, decision, resolution });
   };
 
   return (

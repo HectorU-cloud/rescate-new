@@ -6,6 +6,8 @@ import { Session } from "@contracts/constants";
 import { getSessionCookieOptions } from "./lib/cookies";
 import { createRouter, authedQuery } from "./middleware";
 import { toSafeUser } from "./lib/safe-user";
+import { z } from "zod";
+import { DELETE_ACCOUNT_CONFIRMATION, deleteAccount } from "./lib/account-deletion";
 
 function clearSessionCookie(headers: Headers, resHeaders: Headers) {
   const opts = getSessionCookieOptions(headers);
@@ -37,4 +39,13 @@ export const authRouter = createRouter({
     clearSessionCookie(ctx.req.headers, ctx.resHeaders);
     return { success: true };
   }),
+
+  // Elimina (anonimiza) la cuenta y todos sus datos personales. Ver server/lib/account-deletion.ts.
+  deleteAccount: authedQuery
+    .input(z.object({ confirmation: z.literal(DELETE_ACCOUNT_CONFIRMATION) }))
+    .mutation(async ({ ctx }) => {
+      await deleteAccount(ctx.user);
+      clearSessionCookie(ctx.req.headers, ctx.resHeaders);
+      return { success: true };
+    }),
 });

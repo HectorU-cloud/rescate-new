@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router'
 import './index.css'
 import { TRPCProvider } from "@/providers/trpc"
 import { CartProvider } from "@/hooks/useCart"
+import { DialogsProvider } from "@/providers/dialogs"
 import { Toaster } from "@/components/ui/sonner"
 import App from './App.tsx'
 
@@ -12,8 +13,10 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <TRPCProvider>
         <CartProvider>
-          <App />
-          <Toaster position="top-center" richColors />
+          <DialogsProvider>
+            <App />
+            <Toaster position="top-center" richColors />
+          </DialogsProvider>
         </CartProvider>
       </TRPCProvider>
     </BrowserRouter>

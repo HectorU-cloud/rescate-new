@@ -1,10 +1,11 @@
 import { Link } from "react-router";
-import type { Business, RescuePack } from "@db/schema";
+import type { RescuePack } from "@db/schema";
+import type { PublicBusinessView } from "@contracts/types";
 import { money } from "@/lib/format";
 import { packDayLabel } from "@contracts/packs";
 import { CATEGORY_LABELS } from "@/lib/format";
 
-export function BusinessCard({ business }: { business: Business & { openNow: boolean } }) {
+export function BusinessCard({ business }: { business: PublicBusinessView & { openNow: boolean } }) {
   return (
     <Link
       to={`/negocio/${business.id}`}
@@ -43,7 +44,7 @@ export function RescueCard({
   business,
 }: {
   pack: RescuePack & { reservable?: boolean };
-  business: (Business & { openNow?: boolean }) | null;
+  business: (PublicBusinessView & { openNow?: boolean }) | null;
 }) {
   const discount = Math.round(
     (1 - pack.rescuePrice / pack.originalPrice) * 100,

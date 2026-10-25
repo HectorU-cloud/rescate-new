@@ -11,9 +11,10 @@ function required(name: string): string {
 const isProduction = process.env.NODE_ENV === "production";
 
 // Cuántos proxies de confianza hay delante de la app (para saber la IP real de cada cliente).
-// Por defecto 1 en producción (Render, Railway, Fly… ponen uno) y 0 en local.
+// Por defecto 2 en producción (esta app va detrás de Vercel, que reenvía /api a Railway: son dos proxies)
+// y 0 en local. Si la sirves directamente desde un solo proxy (Railway/Render sin Vercel), pon TRUSTED_PROXY_HOPS=1.
 const rawHops = process.env.TRUSTED_PROXY_HOPS;
-const trustedProxyHops = rawHops !== undefined && rawHops !== "" ? Math.max(0, Number.parseInt(rawHops, 10) || 0) : isProduction ? 1 : 0;
+const trustedProxyHops = rawHops !== undefined && rawHops !== "" ? Math.max(0, Number.parseInt(rawHops, 10) || 0) : isProduction ? 2 : 0;
 
 export const env = {
   appSecret: required("APP_SECRET"),
@@ -22,8 +23,10 @@ export const env = {
   // Login con Google (https://console.cloud.google.com/apis/credentials)
   googleClientId: required("GOOGLE_CLIENT_ID"),
   googleClientSecret: required("GOOGLE_CLIENT_SECRET"),
-  // URL pública de la app (sin "/" final). Si está vacío se deduce de la petición.
-  appUrl: (process.env.APP_URL ?? "").replace(/\/$/, ""),
+  // URL pública de la app (sin "/" final). Obligatoria en producción: con ella se construyen los enlaces de
+  // Google y de los correos, y la cookie de sesión debe quedar en el dominio que ve el usuario (Vercel).
+  // En local, si está vacío se deduce de la petición.
+  appUrl: required("APP_URL").replace(/\/$/, ""),
   // Quien entre con este correo (verificado por Google) recibe role "admin"
   ownerEmail: (process.env.OWNER_EMAIL ?? "").trim().toLowerCase(),
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
@@ -47,6 +50,21 @@ if (!env.appSecret || (isProduction && env.appSecret.length < 32)) {
   throw new Error(
     "APP_SECRET es obligatorio (en producción, mínimo 32 caracteres).",
   );
+}
+
+if (isProduction) {
+  let url: URL | null = null;
+  try {
+    url = new URL(env.appUrl);
+  } catch {
+    // se informa abajo
+  }
+  if (!url || url.protocol !== "https:" || (url.pathname !== "/" && url.pathname !== "")) {
+    throw new Error("APP_URL debe ser la URL pública HTTPS de la app, sin ruta (p. ej. https://tu-dominio.com).");
+  }
+  if (/\.railway\.app$/i.test(url.hostname)) {
+    console.warn("[config] APP_URL apunta al dominio de Railway. Los usuarios entran por Vercel: usa el dominio público de Vercel o el tuyo, o la cookie de sesión no llegará.");
+  }
 }
 
 if (isProduction && !env.resendApiKey) {

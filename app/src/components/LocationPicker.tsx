@@ -3,6 +3,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { BUSINESS_RULES, MILAGRO } from "@contracts/constants";
 import { isInServiceArea } from "@contracts/geo";
+import { addBaseLayer } from "@/lib/map-tiles";
 
 export type Point = { lat: number; lng: number };
 
@@ -59,7 +60,7 @@ export function LocationPicker({ value, onChange, className }: Props) {
     if (!el) return;
     const start = initialRef.current;
     const map = L.map(el).setView(start ? [start.lat, start.lng] : [MILAGRO.lat, MILAGRO.lng], start ? 17 : 14);
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(map);
+    addBaseLayer(map);
     mapRef.current = map;
     if (start) placeMarker(start);
     map.on("click", (e: L.LeafletMouseEvent) => {

@@ -156,7 +156,8 @@ export const adminRouter = createRouter({
       await db.update(businesses).set({
         approvalStatus: input.decision,
         approvalNote: input.decision === "rejected" ? input.note! : null,
-        ...(input.decision === "approved" ? { pendingName: null, pendingAddress: null } : {}),
+        // Al aprobar, la ubicación actual del pin pasa a ser la ubicación aprobada (referencia para futuros movimientos).
+        ...(input.decision === "approved" ? { pendingName: null, pendingAddress: null, approvedLat: biz.lat, approvedLng: biz.lng } : {}),
         ...(input.decision === "rejected" ? { isOpen: false } : {}),
       }).where(eq(businesses.id, input.id));
       await sendPushToUser(biz.ownerId, input.decision === "approved"

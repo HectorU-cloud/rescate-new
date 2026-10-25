@@ -1,3 +1,4 @@
+import { useDialogs } from "@/providers/dialogs";
 import { useState } from "react";
 import { Link } from "react-router";
 import { trpc } from "@/providers/trpc";
@@ -473,6 +474,7 @@ function OrdersTab({ businessId }: { businessId: number }) {
     list.isSuccess ? list.data.filter((x) => x.order.status === "pending").map((x) => x.order.id) : null,
     soundOn,
   );
+  const dialogs = useDialogs();
   const update = trpc.business.updateOrderStatus.useMutation({
     onSuccess: () => {
       utils.business.orders.invalidate();
@@ -641,19 +643,18 @@ function OrdersTab({ businessId }: { businessId: number }) {
               {(["pending", "accepted"].includes(order.status) || (order.type === "delivery" && ["preparing", "ready"].includes(order.status))) && (
                 <button
                   disabled={update.isPending}
-                  onClick={() => {
+                  onClick={async () => {
                     const needsReason = ["preparing", "ready"].includes(order.status);
-                    const reason = window.prompt(
-                      needsReason
-                        ? "Motivo de la cancelación (obligatorio, el cliente lo verá):"
-                        : "Motivo de la cancelación (el cliente lo verá):",
-                    );
+                    const reason = await dialogs.prompt({
+                      title: "Cancelar pedido",
+                      description: needsReason ? "Motivo de la cancelación (obligatorio, el cliente lo verá)." : "Motivo de la cancelación (opcional, el cliente lo verá).",
+                      placeholder: "Motivo",
+                      required: needsReason,
+                      minLength: needsReason ? 5 : 0,
+                      confirmLabel: "Cancelar pedido",
+                    });
                     if (reason === null) return; // el comercio se arrepintió: no cancela
-                    if (needsReason && reason.trim().length < 5) {
-                      toast.error("Escribe un motivo de al menos 5 caracteres.");
-                      return;
-                    }
-                    update.mutate({ orderId: order.id, status: "cancelled", reason: reason.trim() || undefined });
+                    update.mutate({ orderId: order.id, status: "cancelled", reason: reason || undefined });
                   }}
                   className="rounded-xl bg-secondary px-4 py-2.5 text-sm font-extrabold text-destructive"
                 >

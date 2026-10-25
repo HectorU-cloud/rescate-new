@@ -1,3 +1,4 @@
+import { useDialogs } from "@/providers/dialogs";
 import { useEffect, useState } from "react";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
@@ -80,6 +81,7 @@ export default function CourierPanel() {
     onSuccess: () => utils.courier.availability.invalidate(),
     onError: (e) => toast.error(e.message),
   });
+  const dialogs = useDialogs();
   const release = trpc.courier.release.useMutation({
     onSuccess: () => {
       toast.success("Pedido liberado: se avisó a otros repartidores");
@@ -181,10 +183,10 @@ export default function CourierPanel() {
               {withinMinutes(order.courierAcceptedAt, BUSINESS_RULES.courierReleaseWindowMin) && (
                 <button
                   disabled={release.isPending}
-                  onClick={() => {
-                    const reason = window.prompt("¿Por qué sueltas este pedido? (mínimo 5 caracteres)");
+                  onClick={async () => {
+                    const reason = await dialogs.prompt({ title: "¿Por qué sueltas este pedido?", placeholder: "Motivo (mínimo 5 caracteres)", minLength: 5, confirmLabel: "Soltar pedido" });
                     if (reason === null) return;
-                    release.mutate({ orderId: order.id, reason: reason.trim() });
+                    release.mutate({ orderId: order.id, reason });
                   }}
                   className="mt-3 w-full rounded-xl border border-destructive py-2.5 text-xs font-extrabold text-destructive disabled:opacity-50"
                 >
@@ -285,10 +287,10 @@ export default function CourierPanel() {
               {withinMinutes(order.courierAcceptedAt, BUSINESS_RULES.courierReleaseWindowMin) && (
                 <button
                   disabled={release.isPending}
-                  onClick={() => {
-                    const reason = window.prompt("¿Por qué sueltas este pedido? (mínimo 5 caracteres)");
+                  onClick={async () => {
+                    const reason = await dialogs.prompt({ title: "¿Por qué sueltas este pedido?", placeholder: "Motivo (mínimo 5 caracteres)", minLength: 5, confirmLabel: "Soltar pedido" });
                     if (reason === null) return;
-                    release.mutate({ orderId: order.id, reason: reason.trim() });
+                    release.mutate({ orderId: order.id, reason });
                   }}
                   className="mt-3 w-full rounded-xl border border-destructive py-2.5 text-xs font-extrabold text-destructive disabled:opacity-50"
                 >

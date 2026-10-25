@@ -15,11 +15,15 @@ import Profile from "./pages/Profile";
 import AdminCouriers from "./pages/AdminCouriers";
 import AdminCourierReview from "./pages/AdminCourierReview";
 import AdminDashboard from "./pages/AdminDashboard";
+import Privacy from "./pages/Privacy";
+import Terms from "./pages/Terms";
 
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/privacidad" element={<Privacy />} />
+      <Route path="/terminos" element={<Terms />} />
       <Route
         path="*"
         element={

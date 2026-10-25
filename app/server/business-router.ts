@@ -51,23 +51,31 @@ function assertInServiceArea(lat: number, lng: number) {
 
 /**
  * Campos a guardar al fijar la ubicación real del local. Si el local ya estaba confirmado y aprobado
- * y mueve el pin más de `locationReviewMeters`, vuelve a revisión (evita aprobar un sitio y cambiarlo).
+ * y el pin queda a más de `locationReviewMeters` de la ÚLTIMA ubicación aprobada, vuelve a revisión
+ * (evita aprobar un sitio y cambiarlo). Se mide contra la ubicación aprobada y no contra el pin actual:
+ * si no, con pasos de 299 m se llegaría tan lejos como se quisiera sin revisión.
  */
 function locationChange(
-  current: { lat: number; lng: number; locationConfirmed: boolean; approvalStatus: string },
+  current: { lat: number; lng: number; locationConfirmed: boolean; approvalStatus: string; approvedLat?: number | null; approvedLng?: number | null },
   lat: number,
   lng: number,
 ) {
   assertInServiceArea(lat, lng);
-  const moved = distanceMeters(current.lat, current.lng, lat, lng);
-  const needsReview =
-    current.locationConfirmed && current.approvalStatus === "approved" && moved > BUSINESS_RULES.locationReviewMeters;
+  const live = current.locationConfirmed && current.approvalStatus === "approved";
+  // Locales aprobados antes de existir esta referencia: su pin actual es la mejor referencia disponible.
+  const baseLat = current.approvedLat ?? current.lat;
+  const baseLng = current.approvedLng ?? current.lng;
+  const needsReview = live && distanceMeters(baseLat, baseLng, lat, lng) > BUSINESS_RULES.locationReviewMeters;
   return {
     needsReview,
     fields: {
       lat,
       lng,
       locationConfirmed: true,
+      // La referencia solo la mueve un admin al aprobar; aquí se fija si aún no existía.
+      ...(live ? { approvedLat: baseLat, approvedLng: baseLng } : {}),
+      // Local aprobado que confirma su ubicación por primera vez: ese punto es la referencia.
+      ...(!current.locationConfirmed && current.approvalStatus === "approved" ? { approvedLat: lat, approvedLng: lng } : {}),
       ...(needsReview
         ? { approvalStatus: "pending" as const, approvalNote: "Cambió la ubicación del local: requiere nueva revisión.", isOpen: false }
         : {}),

@@ -50,9 +50,9 @@ En producción `APP_SECRET`, `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_
 
 ## Funciones recientes
 
-- GPS de repartidor: consulta `GPS_EN_VIVO.md`.
-- Fotografías, edición de productos y almacenamiento S3/R2: consulta `IMAGENES_Y_EDICION.md`.
-- Notificaciones push web con Firebase Cloud Messaging: consulta `NOTIFICACIONES_PUSH.md`.
+- GPS de repartidor: consulta `docs/GPS_EN_VIVO.md`.
+- Fotografías, edición de productos y almacenamiento S3/R2: consulta `docs/IMAGENES_Y_EDICION.md`.
+- Notificaciones push web con Firebase Cloud Messaging: consulta `docs/NOTIFICACIONES_PUSH.md`.
 
 ## Actualizar una base de datos que ya tiene usuarios (correo único)
 
@@ -74,7 +74,7 @@ SET u.email = CONCAT('duplicado-', u.id, '+', u.email);
 ALTER TABLE users ADD UNIQUE INDEX users_email_unique (email);
 ```
 
-Después ejecuta `npm run db:push`: solo agrega la columna `sessionVersion` y no hace preguntas.
+Después aplica el cambio con `npm run db:migrate` (en local, `db:push`): solo agrega la columna `sessionVersion` y no hace preguntas.
 En una base vacía (instalación nueva) no hace falta nada de esto.
 
 ## Cuentas con correo: cómo funciona
@@ -92,6 +92,25 @@ En una base vacía (instalación nueva) no hace falta nada de esto.
 - El bucket necesita CORS con `PUT` desde tu dominio y `AllowedHeaders: ["content-type"]`.
 - Si alguna vez R2 rechazara las subidas con `SignatureDoesNotMatch`, quita `"content-length"` de `signableHeaders` en `server/lib/image-rules.ts` (el tipo seguirá atado; el tamaño ya se valida al pedir la URL).
 
+## Migraciones (producción)
+
+En local y en CI puedes crear el esquema con `npm run db:push`, pero **en producción no se usa `push`**: no deja historial y, sobre datos existentes, puede fallar a medias o borrar columnas. El flujo es:
+
+```bash
+# 1) Cambiaste db/schema.ts → genera la migración SQL
+npm run db:generate
+# 2) Revisa el archivo nuevo en db/migrations/ y súbelo a git (los .sql SÍ se versionan)
+# 3) Respaldo de la base y, si ya tiene datos, npm run db:check (ver la sección siguiente)
+# 4) Aplícala
+npm run db:migrate
+```
+
+**Primera vez (la base de producción ya existe, creada con `push`):** `npm run db:generate` crea una migración inicial con *todas* las tablas. Esa migración no debe ejecutarse sobre tablas que ya existen. Antes de `db:migrate`, registra la inicial como aplicada sin ejecutarla: crea la tabla `__drizzle_migrations` (la crea `db:migrate` en su primera corrida) y luego inserta una fila con el `hash` y `created_at` (la marca `when` de `db/migrations/meta/_journal.json`) de esa migración. Si prefieres no hacerlo a mano: restaura un respaldo en una base nueva, genera ahí y valida el flujo antes de tocar producción.
+
+**Despliegue en Railway:** comando de arranque `npm run db:migrate && npm start` (las migraciones corren antes de levantar la app; requiere que `drizzle-kit` se instale en el build, que es lo habitual en Railway).
+
+La migración que agrega `approvedLat`/`approvedLng` y `deletedAt` a las tablas `businesses` y `users` solo añade columnas nulas: es segura sobre datos existentes.
+
 ## Claves foráneas: actualizar una base que ya tiene datos
 
 La base ahora impide datos inconsistentes (un pedido de un cliente que no existe, un ítem sin pedido…). Reglas de borrado:
@@ -100,15 +119,36 @@ La base ahora impide datos inconsistentes (un pedido de un cliente que no existe
 - **Se protege el historial**: no se puede borrar un usuario o un comercio que tiene pedidos, mensajes, reclamos o valoraciones.
 - **Se conserva el registro** aunque desaparezca quien lo originó: el pedido queda sin repartidor, el evento sin autor, el ítem sin enlace al producto (con su nombre y precio).
 
-Si tu base ya tiene datos, **antes de `npm run db:push`**:
+Si tu base ya tiene datos, **antes de `npm run db:migrate`**:
 
 ```bash
 mysqldump -u USUARIO -p NOMBRE_DE_LA_BASE > copia.sql   # 1) copia de seguridad
 npm run db:check                                          # 2) busca datos huérfanos (solo lee)
 ```
 
-`db:check` te dice qué filas apuntan a algo que ya no existe y propone una consulta para verlas y otra para arreglarlas según la regla de cada relación. Aplica los arreglos (los de historial se deciden a mano), repite `npm run db:check` hasta que salga en verde y entonces ejecuta `npm run db:push`.
+`db:check` te dice qué filas apuntan a algo que ya no existe y propone una consulta para verlas y otra para arreglarlas según la regla de cada relación. Aplica los arreglos (los de historial se deciden a mano), repite `npm run db:check` hasta que salga en verde y entonces ejecuta `npm run db:migrate`.
 
-Si ejecutas `db:push` con datos huérfanos falla con el error 1452 y **deja la migración a medias** (no toca tus datos, pero aplica solo parte de las claves). No pasa nada: arregla los datos y vuelve a ejecutarlo, retoma lo que faltó. En una base nueva no hace falta nada de esto.
+Si aplicas las claves foráneas con datos huérfanos falla con el error 1452 y **deja la migración a medias** (no toca tus datos, pero aplica solo parte de las claves). No pasa nada: arregla los datos y vuelve a ejecutarlo, retoma lo que faltó. En una base nueva no hace falta nada de esto.
 
 Al agregar una tabla o columna que apunte a otra, declara su clave foránea con `.references(...)`: el test `server/schema-integrity.test.ts` falla si queda alguna sin proteger.
+
+## Variables de Vercel (frontend, se leen al compilar)
+
+| Variable | Para qué |
+| --- | --- |
+| `VITE_MAP_TILE_URL` | Proveedor de teselas del mapa (MapTiler, Stadia, Mapbox…). **Configúrala antes de lanzar:** sin ella se usa OpenStreetMap público, cuya política no permite uso comercial intensivo. Ver `src/lib/map-tiles.ts`. |
+| `VITE_MAP_ATTRIBUTION` | Texto de atribución que exige el proveedor. |
+| `VITE_LEGAL_NAME` | Nombre de la persona o empresa responsable, que sale en la política de privacidad. |
+| `VITE_PRIVACY_EMAIL` | Correo donde las personas ejercen sus derechos de datos (LOPDP). |
+
+## Privacidad y eliminación de cuenta
+
+- Páginas públicas `/privacidad` y `/terminos` (`src/pages/Privacy.tsx`, `Terms.tsx`). Son una base escrita según los datos que la app trata; **revísalas con un abogado** y completa `VITE_LEGAL_NAME` y `VITE_PRIVACY_EMAIL`.
+- Perfil → «Eliminar mi cuenta» (`auth.deleteAccount`, `server/lib/account-deletion.ts`): anonimiza la cuenta y borra direcciones, dispositivos push, ubicación, textos del chat/reclamos/comentarios y datos personales de sus pedidos. Se rechaza con pedidos en curso o si es administrador. Los pedidos conservan montos y fechas.
+
+## Seguridad del despliegue (Vercel → Railway)
+
+- `TRUSTED_PROXY_HOPS` vale **2** por defecto en producción (Vercel y Railway). Si lo cambias a 1, todos los usuarios comparten el mismo límite de intentos de acceso.
+- Quien llame directo al dominio de Railway puede falsear su IP. El límite por correo sigue protegiendo cada cuenta; para cerrar del todo ese hueco habría que poner un dominio propio con Cloudflare delante de Railway y aceptar solo su tráfico.
+- `APP_URL` es obligatoria en producción (HTTPS, sin ruta) y debe ser el dominio que ven los usuarios (el de Vercel o el tuyo), no el de Railway; la app no arranca si falta.
+- `vercel.json` define los encabezados de seguridad (anti-iframe, tipo de contenido, referrer, HSTS, permisos).

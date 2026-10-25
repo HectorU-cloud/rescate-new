@@ -1,5 +1,6 @@
+import { useDialogs } from "@/providers/dialogs";
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
@@ -60,6 +61,7 @@ export default function Profile() {
   const pushStatus = trpc.push.status.useQuery(undefined, { enabled: isAuthenticated, retry: false });
   const registerPush = trpc.push.register.useMutation({ onError: (e) => toast.error(e.message) });
   const unregisterPush = trpc.push.unregister.useMutation({ onError: (e) => toast.error(e.message) });
+  const dialogs = useDialogs();
   const logoutEverywhere = trpc.auth.logoutEverywhere.useMutation({
     onSuccess: () => {
       localStorage.removeItem("rescate-push-token");
@@ -68,6 +70,29 @@ export default function Profile() {
     },
     onError: (e) => toast.error(e.message),
   });
+  const deleteAccount = trpc.auth.deleteAccount.useMutation({
+    onSuccess: () => {
+      localStorage.removeItem("rescate-push-token");
+      localStorage.removeItem("rescate-push-enabled");
+      window.location.href = "/login";
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const askDeleteAccount = async () => {
+    const typed = await dialogs.prompt({
+      title: "Eliminar mi cuenta",
+      description: "Se borrarán tus datos personales (nombre, correo, teléfono, direcciones, foto, mensajes) y no podrás recuperar la cuenta. Tus pedidos pasados quedan sin tus datos. Para confirmar escribe ELIMINAR.",
+      placeholder: "ELIMINAR",
+      minLength: 8,
+      confirmLabel: "Eliminar para siempre",
+    });
+    if (typed === null) return;
+    if (typed.toUpperCase() !== "ELIMINAR") {
+      toast.error("Escribe la palabra ELIMINAR para confirmar.");
+      return;
+    }
+    deleteAccount.mutate({ confirmation: "ELIMINAR" });
+  };
   const firebaseConfig = getFirebaseWebConfig();
   const vapidKey = getFirebaseVapidKey();
   const firebaseWebConfigured = Boolean(firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagingSenderId && firebaseConfig.appId && vapidKey);
@@ -273,12 +298,19 @@ export default function Profile() {
       <button
         disabled={logoutEverywhere.isPending}
         onClick={() => {
-          if (window.confirm("Se cerrará tu sesión en todos tus dispositivos (también en este). ¿Continuar?")) logoutEverywhere.mutate();
+          void dialogs.confirm({ title: "Cerrar sesión en todos los dispositivos", description: "Se cerrará tu sesión en todos tus dispositivos (también en este). ¿Continuar?", confirmLabel: "Continuar" }).then((ok) => { if (ok) logoutEverywhere.mutate(); });
         }}
         className="w-full rounded-2xl bg-card py-3 text-xs font-bold text-muted-foreground ring-1 ring-border disabled:opacity-50"
       >
         Cerrar sesión en todos los dispositivos
       </button>
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-2 text-xs font-semibold text-muted-foreground">
+        <Link to="/privacidad" className="underline underline-offset-2">Política de privacidad</Link>
+        <Link to="/terminos" className="underline underline-offset-2">Términos</Link>
+        <button type="button" disabled={deleteAccount.isPending} onClick={() => void askDeleteAccount()} className="text-destructive underline underline-offset-2 disabled:opacity-50">
+          Eliminar mi cuenta
+        </button>
+      </div>
     </div>
   );
 }

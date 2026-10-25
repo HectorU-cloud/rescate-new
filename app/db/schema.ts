@@ -48,6 +48,8 @@ export const users = mysqlTable("users", {
     .notNull()
     .$onUpdate(() => new Date()),
   lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
+  // Cuenta eliminada por su titular: la fila se conserva (los pedidos la referencian) pero sin datos personales
+  deletedAt: timestamp("deletedAt"),
 });
 
 
@@ -114,6 +116,10 @@ export const businesses = mysqlTable(
     pendingAddress: varchar("pendingAddress", { length: 255 }),
     // El dueño marcó el punto exacto de su local en el mapa (tarifa por km, radio y navegación dependen de él)
     locationConfirmed: boolean("locationConfirmed").default(false).notNull(),
+    // Última ubicación que un admin aprobó. Los movimientos del pin se miden contra este punto (no contra el pin
+    // actual), así que mover el pin en pasos pequeños no permite alejarse sin revisión. Null = aún no hay referencia.
+    approvedLat: double("approvedLat"),
+    approvedLng: double("approvedLng"),
     deliveryMinutes: int("deliveryMinutes").default(30).notNull(),
     rating: double("rating").default(4.5).notNull(),
     // Cantidad de calificaciones reales que respaldan el rating (0 = aún sin calificaciones)
