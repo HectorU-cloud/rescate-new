@@ -6,7 +6,7 @@ import { getDb } from "./queries/connection";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { logOrderEvent } from "./lib/order-events";
 import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
-import { businesses, claims, orderEvents, orders, ratings, users } from "@db/schema";
+import { businesses, claims, courierLocations, orderEvents, orders, ratings, users } from "@db/schema";
 
 const daysAgo = (n: number) => {
   const d = new Date();
@@ -208,9 +208,17 @@ export const adminRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const order = await getDb().query.orders.findFirst({ where: eq(orders.id, input.orderId) });
       if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Pedido no encontrado" });
+      // El admin cancela aunque ya haya repartidor (reservado o en camino): es la salida de los reclamos
+      // del tipo "mi pedido no llegó". Los demás roles sí quedan bloqueados (ver cancelOrderAndRestock).
       await cancelOrderAndRestock(order.id, [...ACTIVE_STATUSES], { by: "admin", reason: input.reason });
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "admin", type: "cancelled", detail: input.reason });
       await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "cancelled", type: order.type, reason: input.reason });
+      // Releer: el repartidor pudo tomar el pedido entre la lectura inicial y la cancelación.
+      const [after] = await getDb().select({ courierId: orders.courierId }).from(orders).where(eq(orders.id, order.id)).limit(1);
+      if (after?.courierId) {
+        await getDb().delete(courierLocations).where(eq(courierLocations.orderId, order.id));
+        await sendPushToUser(after.courierId, { title: "Pedido cancelado por soporte", body: `El pedido ${order.code} fue cancelado: ${input.reason}`, url: "/repartidor", orderId: order.id }).catch(() => undefined);
+      }
       return { ok: true };
     }),
 

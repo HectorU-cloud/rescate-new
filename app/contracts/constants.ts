@@ -130,6 +130,9 @@ export const BUSINESS_RULES = {
   businessAcceptTimeoutMin: 15,
   // El repartidor solo puede soltar un pedido en estos minutos tras tomarlo
   courierReleaseWindowMin: 5,
+  // Un repartidor que reservó un pedido "listo" debe confirmar el retiro (código del local) en este tiempo;
+  // si no, la reserva se libera sola y el pedido vuelve a buscarse repartidor.
+  courierPickupTimeoutMin: 15,
   // Estados en los que el cliente todavía puede cancelar
   customerCancelableStatuses: ["pending", "accepted"],
   // Delivery aceptado o en cocina que el comercio no hace avanzar:

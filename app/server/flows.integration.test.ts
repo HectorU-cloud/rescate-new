@@ -605,8 +605,9 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       ]);
       expect(fulfilled(results)).toBe(1);
       const order = await getOrder(orderId);
+      // Aceptar solo reserva el pedido (sigue "listo" hasta confirmar el código de retiro).
       if (order.status === "cancelled") expect(order.courierId).toBeNull();
-      else { expect(order.status).toBe("picked_up"); expect(order.courierId).toBe(courier.id); }
+      else { expect(order.status).toBe("ready"); expect(order.courierId).toBe(courier.id); }
     });
 
     it("otro comercio no puede cancelar pedidos ajenos", async () => {
@@ -1094,6 +1095,277 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
         await expect(c.profile.saveAddress(addr(bad))).rejects.toThrow();
       }
       expect(await countOf(me.id)).toHaveLength(0);
+    });
+  });
+
+  // ------------------------------------------------------------------ cancelación por el admin
+  describe("cancelación por el admin con repartidor asignado", () => {
+    async function setupAdmin(over: Partial<typeof S.orders.$inferInsert> = {}) {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const courier = await mkUser("courier");
+      const admin = await mkAdmin();
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, courierId: courier.id, courierAcceptedAt: new Date(), ...over });
+      return { customer, owner, biz, courier, admin, orderId };
+    }
+    const REASON = "El pedido nunca llegó";
+
+    it("cancela un pedido reservado por un repartidor (listo, aún sin recoger)", async () => {
+      const { admin, orderId } = await setupAdmin({ status: "ready", readyAt: new Date(), courierPickupCode: "123456" });
+      await callerFor(admin).admin.cancelOrder({ orderId, reason: REASON });
+      const order = await getOrder(orderId);
+      expect([order.status, order.cancelledBy, order.cancelReason]).toEqual(["cancelled", "admin", REASON]);
+    });
+
+    it("cancela un pedido que ya va en camino y borra la ubicación del repartidor", async () => {
+      const { admin, courier, orderId } = await setupAdmin({ status: "picked_up", deliveryConfirmationCode: "123456" });
+      await db.insert(S.courierLocations).values({ orderId, courierId: courier.id, lat: -2.13, lng: -79.59 });
+      await callerFor(admin).admin.cancelOrder({ orderId, reason: REASON });
+      expect((await getOrder(orderId)).status).toBe("cancelled");
+      expect(await db.select().from(S.courierLocations).where(eq(S.courierLocations.orderId, orderId))).toHaveLength(0);
+    });
+
+    it("sigue cancelando pedidos sin repartidor y no toca los ya cerrados", async () => {
+      const { admin, customer, biz } = await setupAdmin();
+      const noCourier = await mkOrder({ customerId: customer.id, businessId: biz, status: "preparing" });
+      await callerFor(admin).admin.cancelOrder({ orderId: noCourier, reason: REASON });
+      expect((await getOrder(noCourier)).status).toBe("cancelled");
+      const delivered = await mkOrder({ customerId: customer.id, businessId: biz, status: "delivered" });
+      await expect(callerFor(admin).admin.cancelOrder({ orderId: delivered, reason: REASON })).rejects.toThrow(/Ya no se puede cancelar/);
+      expect((await getOrder(delivered)).status).toBe("delivered");
+    });
+
+    it("libera el cupo del repartidor: tras cancelar ya puede tomar otro pedido", async () => {
+      const { admin, customer, biz, courier, orderId } = await setupAdmin({ status: "ready", readyAt: new Date() });
+      await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", courierId: courier.id, courierAcceptedAt: new Date() });
+      const next = await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date() });
+      await expect(callerFor(courier).courier.accept({ orderId: next })).rejects.toThrow(/entregas activas/);
+      await callerFor(admin).admin.cancelOrder({ orderId, reason: REASON });
+      expect((await callerFor(courier).courier.accept({ orderId: next })).ok).toBe(true);
+    });
+
+    it("el local, el cliente y otros usuarios SIGUEN sin poder cancelar un pedido con repartidor asignado", async () => {
+      const { owner, customer, orderId } = await setupAdmin({ status: "ready", readyAt: new Date() });
+      await expect(callerFor(owner).business.updateOrderStatus({ orderId, status: "cancelled", reason: "Sin ingredientes" })).rejects.toThrow(/repartidor ya tomó/);
+      await expect(callerFor(customer).orders.cancel({ id: orderId })).rejects.toThrow();
+      await expect(callerFor(await mkUser("customer")).admin.cancelOrder({ orderId, reason: REASON })).rejects.toThrow();
+      expect((await getOrder(orderId)).status).toBe("ready");
+    });
+  });
+
+  // ------------------------------------------------------------------ reservas atascadas
+  describe("reserva que el repartidor nunca confirma (sweepOrders)", () => {
+    async function setupStale(over: Partial<typeof S.orders.$inferInsert> = {}) {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({
+        customerId: customer.id, businessId: biz, status: "ready", courierId: courier.id,
+        courierAcceptedAt: minutesAgo(20), readyAt: minutesAgo(25), courierPickupCode: "123456", ...over,
+      });
+      return { customer, owner, biz, courier, orderId };
+    }
+    const eventTypes = async (orderId: number) =>
+      (await db.select().from(S.orderEvents).where(eq(S.orderEvents.orderId, orderId))).map((e) => e.type);
+
+    it("suelta la reserva a los 15 min: vuelve a 'listo' sin repartidor y con código de retiro nuevo", async () => {
+      const { orderId } = await setupStale();
+      await sweepOrders();
+      const order = await getOrder(orderId);
+      expect([order.status, order.courierId, order.courierAcceptedAt]).toEqual(["ready", null, null]);
+      expect(order.courierPickupCode).toMatch(/^\d{6}$/);
+      expect(order.courierPickupCode).not.toBe("123456");
+      expect(order.codeAttempts).toBe(0);
+      expect(Date.now() - order.readyAt!.getTime()).toBeLessThan(60_000); // plazo nuevo: no se cancela de inmediato
+      expect(await eventTypes(orderId)).toContain("courier_no_show");
+    });
+
+    it("no se cancela en la misma pasada y otro repartidor puede tomarlo", async () => {
+      const { orderId } = await setupStale();
+      await sweepOrders();
+      expect((await getOrder(orderId)).status).toBe("ready");
+      const other = await mkUser("courier");
+      expect((await callerFor(other).courier.accept({ orderId })).ok).toBe(true);
+      expect((await getOrder(orderId)).courierId).toBe(other.id);
+    });
+
+    it("libera el cupo del repartidor (ya puede tomar otro pedido)", async () => {
+      const { customer, biz, courier } = await setupStale();
+      await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", courierId: courier.id, courierAcceptedAt: minutesAgo(30) });
+      const next = await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date() });
+      await expect(callerFor(courier).courier.accept({ orderId: next })).rejects.toThrow(/entregas activas/);
+      await sweepOrders();
+      expect((await callerFor(courier).courier.accept({ orderId: next })).ok).toBe(true);
+    });
+
+    it("no toca reservas recientes, ni pedidos ya recogidos", async () => {
+      const fresh = await setupStale({ courierAcceptedAt: minutesAgo(5), readyAt: minutesAgo(6) });
+      const onTheWay = await setupStale({ status: "picked_up", courierAcceptedAt: minutesAgo(40), deliveryConfirmationCode: "123456" });
+      await sweepOrders();
+      const a = await getOrder(fresh.orderId);
+      expect([a.status, a.courierId]).toEqual(["ready", fresh.courier.id]);
+      const b = await getOrder(onTheWay.orderId);
+      expect([b.status, b.courierId]).toEqual(["picked_up", onTheWay.courier.id]);
+    });
+
+    it("también libera reservas antiguas sin hora de toma, usando la última modificación", async () => {
+      const { orderId } = await setupStale({ courierAcceptedAt: null, updatedAt: minutesAgo(30) });
+      await sweepOrders();
+      expect((await getOrder(orderId)).courierId).toBeNull();
+    });
+
+    it("si el repartidor confirma el retiro justo cuando se libera, gana uno solo y el estado queda coherente", async () => {
+      const { courier, orderId } = await setupStale();
+      await Promise.allSettled([
+        sweepOrders(),
+        callerFor(courier).courier.confirmPickup({ orderId, pickupCode: "123456" }),
+      ]);
+      const order = await getOrder(orderId);
+      if (order.status === "picked_up") expect(order.courierId).toBe(courier.id);
+      else { expect(order.status).toBe("ready"); expect(order.courierId).toBeNull(); }
+    });
+  });
+
+  // ------------------------------------------------------------------ código de retiro
+  describe("código de retiro: intentos limitados", () => {
+    async function setupCode() {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date(), courierPickupCode: "123456" });
+      await callerFor(courier).courier.accept({ orderId });
+      return { customer, owner, biz, courier, orderId };
+    }
+
+    it("avisa cuántos intentos quedan y el código correcto sigue funcionando dentro del límite", async () => {
+      const { courier, orderId } = await setupCode();
+      const c = callerFor(courier);
+      await expect(c.courier.confirmPickup({ orderId, pickupCode: "000000" })).rejects.toThrow(/Te quedan 4 intentos/);
+      await expect(c.courier.confirmPickup({ orderId, pickupCode: "000001" })).rejects.toThrow(/Te quedan 3 intentos/);
+      expect((await c.courier.confirmPickup({ orderId, pickupCode: "123456" })).ok).toBe(true);
+      const order = await getOrder(orderId);
+      expect([order.status, order.codeAttempts]).toEqual(["picked_up", 0]);
+    });
+
+    it("tras 5 fallos se le quita el pedido, se cambia el código y el viejo ya no sirve", async () => {
+      const { courier, orderId } = await setupCode();
+      const c = callerFor(courier);
+      for (let i = 0; i < 4; i++) await expect(c.courier.confirmPickup({ orderId, pickupCode: `00000${i}` })).rejects.toThrow(/no coincide/i);
+      await expect(c.courier.confirmPickup({ orderId, pickupCode: "000009" })).rejects.toThrow(/se agotaron los intentos/i);
+
+      const order = await getOrder(orderId);
+      expect([order.status, order.courierId]).toEqual(["ready", null]);
+      expect(order.courierPickupCode).not.toBe("123456");
+      expect((await db.select().from(S.orderEvents).where(eq(S.orderEvents.orderId, orderId))).map((e) => e.type)).toContain("pickup_code_locked");
+      // Ni siquiera el código correcto de antes le sirve ya: no es su pedido.
+      await expect(c.courier.confirmPickup({ orderId, pickupCode: "123456" })).rejects.toThrow();
+      expect((await getOrder(orderId)).status).toBe("ready");
+    });
+
+    it("quien agotó los intentos no puede volver a tomar ese pedido, pero otro repartidor sí", async () => {
+      const { courier, orderId } = await setupCode();
+      const c = callerFor(courier);
+      for (let i = 0; i < 5; i++) await c.courier.confirmPickup({ orderId, pickupCode: `00000${i}` }).catch(() => undefined);
+      await expect(c.courier.accept({ orderId })).rejects.toThrow(/No puedes volver a tomar/);
+      const other = await mkUser("courier");
+      await callerFor(other).courier.accept({ orderId });
+      const newCode = (await getOrder(orderId)).courierPickupCode!;
+      expect((await callerFor(other).courier.confirmPickup({ orderId, pickupCode: newCode })).ok).toBe(true);
+    });
+
+    it("100 intentos en paralelo: como mucho 5 se comparan y el pedido queda liberado", async () => {
+      const { courier, orderId } = await setupCode();
+      const c = callerFor(courier);
+      const results = await Promise.allSettled(Array.from({ length: 100 }, (_, i) => c.courier.confirmPickup({ orderId, pickupCode: String(100000 + i) })));
+      expect(fulfilled(results)).toBe(0);
+      const compared = results.filter((r) => r.status === "rejected" && /no coincide/i.test((r.reason as Error).message)).length;
+      expect(compared).toBeLessThanOrEqual(5);
+      const order = await getOrder(orderId);
+      expect([order.status, order.courierId]).toEqual(["ready", null]);
+    });
+
+    it("al soltar un pedido (voluntariamente) se genera un código de retiro nuevo", async () => {
+      const { courier, orderId } = await setupCode();
+      await callerFor(courier).courier.release({ orderId, reason: "No puedo llegar al local" });
+      const order = await getOrder(orderId);
+      expect(order.courierId).toBeNull();
+      expect(order.courierPickupCode).toMatch(/^\d{6}$/);
+      expect(order.courierPickupCode).not.toBe("123456");
+    });
+  });
+
+  // ------------------------------------------------------------------ nombre/dirección pendientes
+  describe("cambios pendientes de nombre y dirección", () => {
+    async function setupApproved() {
+      const owner = await mkUser("business");
+      const id = await mkBusiness(owner.id);
+      const [row] = await db.select().from(S.businesses).where(eq(S.businesses.id, id));
+      const base = { name: row.name, category: "test", address: row.address, deliveryFee: 1, deliveryMinutes: 30 };
+      const read = async () => (await db.select().from(S.businesses).where(eq(S.businesses.id, id)))[0];
+      return { owner, id, base, read, c: callerFor(owner) };
+    }
+
+    it("pedir un cambio de nombre lo deja pendiente sin publicarlo", async () => {
+      const { c, base, read } = await setupApproved();
+      const r = await c.business.upsertBusiness({ ...base, name: `${base.name} Nuevo` });
+      expect(r.reviewRequired).toBe(true);
+      const row = await read();
+      expect([row.name, row.pendingName]).toEqual([base.name, `${base.name} Nuevo`]);
+    });
+
+    it("si el dueño vuelve al nombre original, la propuesta se descarta", async () => {
+      const { c, base, read } = await setupApproved();
+      await c.business.upsertBusiness({ ...base, name: `${base.name} Nuevo` });
+      const r = await c.business.upsertBusiness({ ...base });
+      expect(r.reviewRequired).toBe(false);
+      const row = await read();
+      expect([row.name, row.pendingName]).toEqual([base.name, null]);
+    });
+
+    it("lo mismo con la dirección", async () => {
+      const { c, base, read } = await setupApproved();
+      await c.business.upsertBusiness({ ...base, address: "Otra dirección 999" });
+      expect((await read()).pendingAddress).toBe("Otra dirección 999");
+      await c.business.upsertBusiness({ ...base });
+      const row = await read();
+      expect([row.address, row.pendingAddress]).toEqual([base.address, null]);
+    });
+
+    it("revertir solo el nombre conserva la propuesta de dirección, y viceversa", async () => {
+      const { c, base, read } = await setupApproved();
+      await c.business.upsertBusiness({ ...base, name: `${base.name} Nuevo`, address: "Otra dirección 999" });
+      await c.business.upsertBusiness({ ...base, address: "Otra dirección 999" }); // nombre vuelve al original
+      let row = await read();
+      expect([row.pendingName, row.pendingAddress]).toEqual([null, "Otra dirección 999"]);
+      await c.business.upsertBusiness({ ...base, name: `${base.name} Otro` }); // dirección vuelve; nombre cambia de nuevo
+      row = await read();
+      expect([row.pendingName, row.pendingAddress]).toEqual([`${base.name} Otro`, null]);
+    });
+
+    it("cambiar una propuesta por otra reemplaza la anterior (no se acumulan)", async () => {
+      const { c, base, read } = await setupApproved();
+      await c.business.upsertBusiness({ ...base, name: `${base.name} A` });
+      await c.business.upsertBusiness({ ...base, name: `${base.name} B` });
+      expect((await read()).pendingName).toBe(`${base.name} B`);
+    });
+
+    it("editar otros datos sin tocar nombre ni dirección no deja nada pendiente", async () => {
+      const { c, base, read } = await setupApproved();
+      await c.business.upsertBusiness({ ...base, deliveryFee: 2 });
+      const row = await read();
+      expect([row.deliveryFee, row.pendingName, row.pendingAddress]).toEqual([2, null, null]);
+    });
+
+    it("un local sin aprobar aplica los datos directo y limpia propuestas viejas", async () => {
+      const owner = await mkUser("business");
+      const id = await mkBusiness(owner.id, { approvalStatus: "pending", pendingName: "Viejo pendiente", pendingAddress: "Vieja dirección 1" });
+      const [row] = await db.select().from(S.businesses).where(eq(S.businesses.id, id));
+      await callerFor(owner).business.upsertBusiness({ name: `${row.name} editado`, category: "test", address: row.address, deliveryFee: 1, deliveryMinutes: 30 });
+      const after = (await db.select().from(S.businesses).where(eq(S.businesses.id, id)))[0];
+      expect([after.name, after.pendingName, after.pendingAddress]).toEqual([`${row.name} editado`, null, null]);
     });
   });
 

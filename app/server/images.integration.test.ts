@@ -31,6 +31,12 @@ describe.skipIf(!enabled)("fotos: tamaño, propiedad y limpieza (MySQL real + S3
     fakeS3 = http.createServer((req, res) => {
       requests.push({ method: req.method ?? "", url: req.url ?? "" });
       res.statusCode = req.method === "DELETE" ? (failDeletes ? 500 : 204) : 200;
+      // La copia (CopyObject = PUT con x-amz-copy-source) responde el XML que espera el SDK.
+      if (req.method === "PUT" && req.headers["x-amz-copy-source"]) {
+        res.setHeader("content-type", "application/xml");
+        res.end('<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult><ETag>"etag"</ETag><LastModified>2026-01-01T00:00:00.000Z</LastModified></CopyObjectResult>');
+        return;
+      }
       res.end();
     });
     await new Promise<void>((resolve) => fakeS3.listen(0, "127.0.0.1", resolve));
@@ -272,6 +278,34 @@ describe.skipIf(!enabled)("fotos: tamaño, propiedad y limpieza (MySQL real + S3
       for (const url of ["https://evil.example/x.png", ownUrl(productFolder(bizId)), ownUrl(packFolder(other.bizId)), "data:image/png;base64,AAAA"]) {
         expect((await failure(c.business.createRescuePack(pack(url)))).code, url).toBe("BAD_REQUEST");
       }
+    });
+  });
+
+  describe("fotos de packs: la foto temporal se confirma al final", () => {
+    const stagedUrl = (bizId: number) => `${PUBLIC}/staging/${packFolder(bizId)}/${name()}.jpg`;
+    const pack = (imageUrl: string, over: Record<string, unknown> = {}) => ({ title: `${tag} pack`, originalPrice: 6, rescuePrice: 2, quantityTotal: 3, pickupStart: "19:00", pickupEnd: "20:30", imageUrl, ...over });
+
+    it("si el precio de rescate es inválido NO se copia ni se borra nada del almacenamiento", async () => {
+      const { owner, bizId } = await mkBusinessOwner();
+      const e = await failure(callerFor(owner).business.createRescuePack(pack(stagedUrl(bizId), { rescuePrice: 9 })));
+      expect(e.code).toBe("BAD_REQUEST");
+      expect(e.message).toMatch(/precio de rescate/i);
+      expect(requests).toEqual([]); // antes: se copiaba a la carpeta definitiva y se borraba la temporal
+    });
+
+    it("tras el error se puede reintentar con la MISMA foto temporal", async () => {
+      const { owner, bizId } = await mkBusinessOwner();
+      const c = callerFor(owner);
+      const url = stagedUrl(bizId);
+      await failure(c.business.createRescuePack(pack(url, { rescuePrice: 9 })));
+      requests.length = 0;
+      const { id } = await c.business.createRescuePack(pack(url));
+      created.packs.push(id);
+      // El reintento sí confirma la foto: la copia a su carpeta definitiva y borra exactamente la temporal.
+      expect(requests.filter((r) => r.method === "PUT")).toHaveLength(1);
+      expect(deletes()).toEqual([`/test-bucket/${keyOf(url)}`]);
+      const [row] = await db.select().from(S.rescuePacks).where(eq(S.rescuePacks.id, id));
+      expect(row.imageUrl?.startsWith(`${PUBLIC}/${packFolder(bizId)}/`)).toBe(true);
     });
   });
 

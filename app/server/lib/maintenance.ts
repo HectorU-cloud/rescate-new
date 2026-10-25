@@ -1,8 +1,8 @@
-import { and, eq, inArray, isNull, lt, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, isNotNull, or } from "drizzle-orm";
 import { BUSINESS_RULES } from "@contracts/constants";
 import { getDb } from "../queries/connection";
 import { businesses, orders, type OrderStatus } from "@db/schema";
-import { cancelOrderAndRestock } from "./orders";
+import { cancelOrderAndRestock, releaseOrderFromCourier } from "./orders";
 import { logOrderEvent } from "./order-events";
 import { notifyBusinessStalled, notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser } from "./push-notifications";
 
@@ -30,14 +30,16 @@ async function cancelBySystem(order: typeof orders.$inferSelect, from: OrderStat
  *  - "pendiente" que el comercio nunca acepta: cancelación automática.
  *  - delivery "aceptado"/"en preparación" que el comercio no avanza: recordatorio y, vencido el plazo, cancelación.
  *    (Los rescates quedan fuera: esperan al cliente dentro de su ventana de retiro.)
+ *  - "listo" con repartidor que reservó pero nunca confirma el retiro: se libera la reserva y se busca otro.
  * Es idempotente y segura de ejecutar en paralelo (las cancelaciones son atómicas).
  */
 export async function sweepOrders() {
-  if (running) return { cancelled: 0, reminded: 0, businessReminded: 0 };
+  if (running) return { cancelled: 0, reminded: 0, businessReminded: 0, released: 0 };
   running = true;
   let cancelled = 0;
   let reminded = 0;
   let businessReminded = 0;
+  let released = 0;
   try {
     const db = getDb();
 
@@ -95,12 +97,37 @@ export async function sweepOrders() {
       await notifyBusinessStalled({ orderId: o.id, code: o.code, businessId: o.businessId, status: o.status, idleMin, timeoutMin: BUSINESS_RULES.businessProgressTimeoutMin });
       businessReminded += 1;
     }
+
+    // 5) Repartidor que reservó el pedido y nunca confirma el retiro: se le quita la reserva.
+    //    Sin esto el pedido quedaba "listo" con repartidor para siempre y ocupaba cupo del cliente
+    //    (pedidos en curso) y del repartidor (entregas activas). Se avisa a todos los involucrados.
+    const cutoff = minutesAgo(BUSINESS_RULES.courierPickupTimeoutMin);
+    const reservationStale = or(
+      lt(orders.courierAcceptedAt, cutoff),
+      // Reservas antiguas sin hora de toma: se usa la última modificación del pedido.
+      and(isNull(orders.courierAcceptedAt), lt(orders.updatedAt, cutoff)),
+    );
+    const stale = await db.select().from(orders).where(and(
+      eq(orders.type, "delivery"), eq(orders.status, "ready"), isNotNull(orders.courierId), reservationStale,
+    ));
+    for (const o of stale) {
+      const courierId = o.courierId!;
+      const ok = await releaseOrderFromCourier(o.id, courierId, ["ready"], reservationStale);
+      if (!ok) continue; // el repartidor justo confirmó el retiro o lo soltó: no pasa nada
+      released += 1;
+      await logOrderEvent({ orderId: o.id, actorId: courierId, actorRole: "system", type: "courier_no_show", detail: `No confirmó el retiro en ${BUSINESS_RULES.courierPickupTimeoutMin} minutos.` });
+      await sendPushToUser(courierId, { title: "Reserva liberada ⏱️", body: `Liberamos el pedido ${o.code} porque no confirmaste el retiro en ${BUSINESS_RULES.courierPickupTimeoutMin} minutos.`, url: "/repartidor", orderId: o.id }).catch(() => undefined);
+      await sendPushToUser(o.customerId, { title: "Buscamos otro repartidor 🛵", body: `El repartidor de tu pedido ${o.code} no llegó al local. Estamos asignando otro.`, orderId: o.id }).catch(() => undefined);
+      const [biz] = await db.select().from(businesses).where(eq(businesses.id, o.businessId)).limit(1);
+      if (biz) await sendPushToUser(biz.ownerId, { title: "El repartidor no llegó", body: `El pedido ${o.code} sigue listo y buscamos otro repartidor. El código de retiro cambió.`, url: "/panel", orderId: o.id }).catch(() => undefined);
+      await notifyCouriersOrderReady(o.id);
+    }
   } catch (error) {
     console.error("[maintenance] Error revisando pedidos vencidos:", error);
   } finally {
     running = false;
   }
-  return { cancelled, reminded, businessReminded };
+  return { cancelled, reminded, businessReminded, released };
 }
 
 let timer: ReturnType<typeof setInterval> | undefined;

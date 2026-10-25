@@ -23,6 +23,11 @@ La pantalla ahora está en `/admin/verificacion`. Guardar un cambio de foto, veh
 
 ## 4. Caminos de falla
 - **Cliente**: solo puede cancelar en `pending` y `accepted`. Desde "preparando", "listo" y "en camino" ya no puede (mensaje claro en pantalla y bloqueo en el servidor); en su lugar puede enviar un **reclamo**.
+- **Reserva que el repartidor nunca confirma**: si toma un pedido "listo" y no confirma el retiro (código del local) en 15 min (`courierPickupTimeoutMin`), el barrido automático le quita la reserva, genera un código de retiro nuevo, reinicia el plazo y avisa al repartidor, al cliente, al local y a los demás repartidores. Así el pedido ya no ocupa cupo (pedidos en curso del cliente, entregas activas del repartidor).
+- **Código de retiro con límite de intentos**: 5 intentos (`maxCodeAttempts`, el mismo contador que la entrega). Al agotarlos se le quita el pedido, se cambia el código, se avisa al local y ese repartidor no puede volver a tomar ese pedido. Al soltar un pedido (voluntaria o automáticamente) el código también se regenera.
+- **El admin siempre puede cancelar** un pedido activo, aunque ya tenga repartidor (reservado o en camino): se borra su ubicación y se le avisa. El local, el cliente y el sistema siguen sin poder cancelar un pedido "listo" con repartidor asignado.
+- **Cambios de nombre/dirección**: lo pendiente de aprobación refleja siempre lo último que envió el dueño; si vuelve al valor publicado, la propuesta se descarta.
+- **Fotos de packs**: la foto temporal se confirma al final, justo antes de guardar; si falla otra validación no se pierde ni deja copias huérfanas.
 - **Repartidor no puede soltar libremente**: solo dentro de los primeros 5 min tras tomarlo, con motivo; el pedido vuelve a "listo" y se avisa de nuevo. Después debe contactar soporte.
 - **Nadie toma el pedido**: a los 20 min se cancela automáticamente (`cancelledBy = system`), con aviso al cliente y al comercio.
 - **El comercio no responde**: un pedido `pending` se cancela a los 15 min.

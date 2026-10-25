@@ -9,7 +9,7 @@ import { BUSINESS_RULES } from "@contracts/constants";
 import { computePackExpiry, isPackExpired } from "@contracts/packs";
 import { distanceMeters, isInServiceArea } from "@contracts/geo";
 import { codesMatch } from "./lib/codes";
-import { assertValidImageUrl, businessImageFolder, createImageUploadUrl, promoteStagedImageUrl, type SupportedImageMime } from "./lib/image-storage";
+import { assertValidImageUrl, businessImageFolder, createImageUploadUrl, deleteStoredImage, promoteStagedImageUrl, type SupportedImageMime } from "./lib/image-storage";
 import { releaseReplacedImage } from "./lib/image-cleanup";
 import { IMAGE_RULES } from "@contracts/constants";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
@@ -150,23 +150,30 @@ export const businessRouter = createRouter({
         const loc = lat !== undefined && lng !== undefined ? locationChange(existing, lat, lng) : null;
         const nameChanged = data.name !== existing.name;
         const addressChanged = data.address !== existing.address;
-        const requiresBusinessReview = existing.approvalStatus === "approved" && (nameChanged || addressChanged);
+        const isApproved = existing.approvalStatus === "approved";
+        // En un local aprobado, nombre y dirección nuevos no se publican hasta que un admin los apruebe.
+        const requiresBusinessReview = isApproved && (nameChanged || addressChanged);
         const safeData = requiresBusinessReview
           ? { ...data, name: existing.name, address: existing.address }
           : data;
+        // Lo pendiente refleja SIEMPRE lo que el dueño envió ahora: si vuelve al nombre/dirección publicados,
+        // la propuesta se descarta (si no, el admin aprobaría un cambio que el dueño ya había desistido).
+        // Si el local no está aprobado, los datos se aplican directo y no puede quedar nada pendiente.
+        const nextPendingName = isApproved && nameChanged ? data.name : null;
+        const nextPendingAddress = isApproved && addressChanged ? data.address : null;
         await db.update(businesses).set({
           ...safeData,
-          ...(requiresBusinessReview ? {
-            pendingName: nameChanged ? data.name : existing.pendingName,
-            pendingAddress: addressChanged ? data.address : existing.pendingAddress,
-          } : {}),
+          pendingName: nextPendingName,
+          pendingAddress: nextPendingAddress,
           ...(existing.approvalStatus === "rejected" ? { approvalStatus: "pending" as const, approvalNote: null } : {}),
           ...(loc?.fields ?? {}),
         }).where(eq(businesses.id, existing.id));
         if (loc?.needsReview) await notifyAdminsLocationReview(existing.name);
-        if (requiresBusinessReview) {
+        // Se avisa al admin solo cuando la propuesta es nueva o cambió (no en cada guardado).
+        const proposalChanged = nextPendingName !== existing.pendingName || nextPendingAddress !== existing.pendingAddress;
+        if (requiresBusinessReview && proposalChanged) {
           const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, "admin"));
-          await sendPushToUsers(admins.map((a) => a.id), { title: "Cambio de comercio por revisar 🏪", body: `${existing.name} solicitó cambiar ${nameChanged && addressChanged ? "nombre y dirección" : nameChanged ? "el nombre" : "la dirección"}.`, url: "/admin" }).catch(() => undefined);
+          await sendPushToUsers(admins.map((a) => a.id), { title: "Cambio de comercio por revisar 🏪", body: `${existing.name} solicitó cambiar ${nextPendingName && nextPendingAddress ? "nombre y dirección" : nextPendingName ? "el nombre" : "la dirección"}.`, url: "/admin" }).catch(() => undefined);
         }
         return { id: existing.id, reviewRequired: requiresBusinessReview };
       }
@@ -453,31 +460,42 @@ export const businessRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
       const packFolder = businessImageFolder(biz.id, "rescue-pack");
-      const finalImageUrl = await promoteStagedImageUrl(input.imageUrl, packFolder);
-      assertValidImageUrl(finalImageUrl, packFolder);
+      // Primero TODAS las validaciones que no tocan el almacenamiento: si alguna falla, la foto temporal
+      // queda intacta (el dueño puede corregir el dato y reintentar sin volver a subirla).
       if (input.rescuePrice >= input.originalPrice) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "El precio de rescate debe ser menor al precio original",
         });
       }
-      const [{ id }] = await getDb()
-        .insert(rescuePacks)
-        .values({
-          businessId: biz.id,
-          title: input.title,
-          description: input.description ?? null,
-          imageUrl: finalImageUrl ?? null,
-          originalPrice: input.originalPrice,
-          rescuePrice: input.rescuePrice,
-          quantityTotal: input.quantityTotal,
-          quantityLeft: input.quantityTotal,
-          pickupStart: input.pickupStart,
-          pickupEnd: input.pickupEnd,
-          expiresAt: computePackExpiry(input.pickupStart, input.pickupEnd),
-        })
-        .$returningId();
-      return { id };
+      const expiresAt = computePackExpiry(input.pickupStart, input.pickupEnd);
+      // La foto se confirma (copia a su carpeta definitiva y borra la temporal) justo antes de guardar.
+      const finalImageUrl = await promoteStagedImageUrl(input.imageUrl, packFolder);
+      const promoted = Boolean(finalImageUrl) && finalImageUrl !== input.imageUrl;
+      try {
+        assertValidImageUrl(finalImageUrl, packFolder);
+        const [{ id }] = await getDb()
+          .insert(rescuePacks)
+          .values({
+            businessId: biz.id,
+            title: input.title,
+            description: input.description ?? null,
+            imageUrl: finalImageUrl ?? null,
+            originalPrice: input.originalPrice,
+            rescuePrice: input.rescuePrice,
+            quantityTotal: input.quantityTotal,
+            quantityLeft: input.quantityTotal,
+            pickupStart: input.pickupStart,
+            pickupEnd: input.pickupEnd,
+            expiresAt,
+          })
+          .$returningId();
+        return { id };
+      } catch (error) {
+        // Si aun así falla el guardado, no deja una copia definitiva huérfana sin pack que la use.
+        if (promoted && finalImageUrl) await deleteStoredImage(finalImageUrl, packFolder);
+        throw error;
+      }
     }),
 
   toggleRescuePack: authedQuery

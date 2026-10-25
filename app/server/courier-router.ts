@@ -5,12 +5,13 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
+import { releaseOrderFromCourier } from "./lib/orders";
 import { logOrderEvent } from "./lib/order-events";
 import { redactForCourierBoard } from "./lib/order-privacy";
 import { codesMatch } from "./lib/codes";
 import { MAX_ACTIVE_DELIVERIES, canCourierRelease, hasReachedActiveLimit } from "./lib/order-rules";
 import { BUSINESS_RULES } from "@contracts/constants";
-import { businesses, courierLocations, orderItems, orders, users } from "@db/schema";
+import { businesses, courierLocations, orderEvents, orderItems, orders, users } from "@db/schema";
 
 
 export const courierRouter = createRouter({
@@ -87,6 +88,14 @@ export const courierRouter = createRouter({
       if (!order) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido ya fue tomado" });
       }
+      // Quien agotó los intentos del código de retiro de este pedido no puede volver a tomarlo
+      // (si no, podría repetir "tomar → 5 intentos → soltar" para seguir adivinando códigos nuevos).
+      const [locked] = await db.select({ id: orderEvents.id }).from(orderEvents)
+        .where(and(eq(orderEvents.orderId, order.id), eq(orderEvents.actorId, ctx.user.id), eq(orderEvents.type, "pickup_code_locked")))
+        .limit(1);
+      if (locked) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "No puedes volver a tomar este pedido." });
+      }
       const [active] = await db.select({ count: sql<number>`count(*)` }).from(orders)
         .where(and(eq(orders.courierId, ctx.user.id), inArray(orders.status, ["ready", "picked_up"])));
       if (hasReachedActiveLimit(Number(active?.count ?? 0))) {
@@ -99,6 +108,7 @@ export const courierRouter = createRouter({
         .set({
           courierId: ctx.user.id,
           courierAcceptedAt: new Date(),
+          codeAttempts: 0,
           ...(order.courierPickupCode ? {} : { courierPickupCode }),
         })
         .where(and(eq(orders.id, order.id), eq(orders.status, "ready"), isNull(orders.courierId)));
@@ -136,8 +146,36 @@ export const courierRouter = createRouter({
       if (!order) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes confirmar este pedido" });
       }
+      // Puerta anti fuerza bruta (igual que en la entrega): cada intento consume uno ANTES de comparar el
+      // código y la condición es atómica, así que aunque lleguen 100 intentos en paralelo solo pasan los primeros 5.
+      const [gate] = await db.update(orders)
+        .set({ codeAttempts: sql`${orders.codeAttempts} + 1`, updatedAt: order.updatedAt })
+        .where(and(
+          eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "ready"), eq(orders.type, "delivery"),
+          lt(orders.codeAttempts, BUSINESS_RULES.maxCodeAttempts),
+        ));
+      if (gate.affectedRows === 0) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Se agotaron los intentos para confirmar el retiro. El pedido se liberó para otro repartidor." });
+      }
       if (!codesMatch(order.courierPickupCode, input.pickupCode)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "El código no coincide. Pídele el código al comercio." });
+        const [fresh] = await db.select({ attempts: orders.codeAttempts }).from(orders).where(eq(orders.id, order.id)).limit(1);
+        const left = Math.max(0, BUSINESS_RULES.maxCodeAttempts - (fresh?.attempts ?? BUSINESS_RULES.maxCodeAttempts));
+        if (left === 0) {
+          // Sin intentos: se le quita la reserva y se genera un código nuevo; ya no puede seguir probando.
+          const released = await releaseOrderFromCourier(order.id, ctx.user.id, ["ready"]);
+          await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "pickup_code_locked" });
+          if (released) {
+            const [biz] = await db.select().from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
+            if (biz) await sendPushToUser(biz.ownerId, { title: "Código de retiro bloqueado", body: `Un repartidor falló el código del pedido ${order.code} varias veces. Se liberó el pedido y el código cambió.`, url: "/panel", orderId: order.id }).catch(() => undefined);
+            await notifyCouriersOrderReady(order.id);
+          }
+        }
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: left > 0
+            ? `El código no coincide. Pídele el código al comercio. Te quedan ${left} intento${left === 1 ? "" : "s"}.`
+            : "El código no coincide y se agotaron los intentos. El pedido se liberó para otro repartidor.",
+        });
       }
 
       const deliveryConfirmationCode = String(randomInt(100000, 1000000));
@@ -176,13 +214,8 @@ export const courierRouter = createRouter({
       if (!canCourierRelease(order.courierAcceptedAt)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Solo puedes soltar un pedido durante los primeros ${BUSINESS_RULES.courierReleaseWindowMin} minutos. Si hay un problema, contacta al soporte.` });
       }
-      const [res] = await db.update(orders).set({
-        courierId: null, status: "ready", deliveryConfirmationCode: null, codeAttempts: 0, courierAcceptedAt: null,
-        // El plazo para que otro lo tome se reinicia, pero el cliente no espera de más.
-        readyAt: new Date(), courierReminderSentAt: null,
-      }).where(and(eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, order.status)));
-      if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido ya cambió de estado" });
-      await db.delete(courierLocations).where(eq(courierLocations.orderId, order.id));
+      const released = await releaseOrderFromCourier(order.id, ctx.user.id, [order.status as "ready" | "picked_up"]);
+      if (!released) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido ya cambió de estado" });
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "courier_released", detail: input.reason });
       await notifyCouriersOrderReady(order.id);
       return { ok: true };
