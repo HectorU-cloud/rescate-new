@@ -11,3 +11,5 @@
 
 ## Importante
 Esta actualización se centra en la presentación del frontend y mantiene las rutas y consultas existentes. La comprobación TypeScript no pudo completarse en este entorno porque faltan definiciones de tipos de Node/Vite dentro de `node_modules`; ejecutar `npm ci` en un entorno con acceso al registro y después `npm run check` y `npm run build` antes de desplegar.
+- Pantalla de detalle del pedido con resumen visual del estado actual, descripción contextual y barra de progreso por etapas.
+- Sección de seguimiento con mapa más amplio y etiqueta clara para distinguir pedidos a domicilio de rescates con retiro en local.

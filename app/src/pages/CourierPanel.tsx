@@ -128,7 +128,7 @@ export default function CourierPanel() {
         <p className="font-display mt-1 text-3xl font-extrabold">
           {money(earnings.data?.earnings ?? 0)}
         </p>
-        <div className="mt-3 flex gap-4 text-xs font-bold text-white/80">
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-bold text-white/80">
           <span>✅ {earnings.data?.deliveries ?? 0} entregas</span>
           <span>🛵 {earnings.data?.active ?? 0} en curso</span>
           <span>{earnings.data?.rating != null ? `⭐ ${earnings.data.rating.toFixed(1)} (${earnings.data.ratingCount})` : "⭐ Sin calificaciones"}</span>

@@ -9,7 +9,7 @@ import { ClaimBox } from "@/components/ClaimBox";
 import { RatingBox } from "@/components/RatingBox";
 import { CodeNotice } from "@/components/CodeNotice";
 import { money, timeAgo } from "@/lib/format";
-import { MILAGRO } from "@contracts/constants";
+import { DELIVERY_FLOW, MILAGRO, ORDER_STATUS_LABELS, RESCUE_FLOW, type OrderStatusKey } from "@contracts/constants";
 import { toast } from "sonner";
 
 export default function OrderDetail() {
@@ -81,6 +81,22 @@ export default function OrderDetail() {
 
   const { order, items, business, courier } = detail.data;
   const isActive = !["delivered", "cancelled"].includes(order.status);
+  const orderFlow = order.type === "delivery" ? DELIVERY_FLOW : RESCUE_FLOW;
+  const currentStep = orderFlow.indexOf(order.status as OrderStatusKey);
+  const statusMeta = ORDER_STATUS_LABELS[order.status as OrderStatusKey] ?? ORDER_STATUS_LABELS.pending;
+  const statusDescription = order.status === "delivered"
+    ? "¡Gracias por rescatar alimentos! Esperamos que disfrutes tu pedido."
+    : order.status === "cancelled"
+      ? "Este pedido ya no está en curso. Puedes revisar el detalle a continuación."
+      : order.status === "picked_up"
+        ? "Tu pedido está en camino. Puedes consultar la ubicación más abajo."
+        : order.status === "ready"
+          ? order.type === "delivery" ? "Tu pedido está listo y pronto saldrá hacia tu dirección." : "Tu rescate está listo para retirar en el local."
+          : order.status === "preparing"
+            ? "El local está preparando tu pedido con cuidado."
+            : order.status === "accepted"
+              ? "El local confirmó tu pedido. Te mostraremos aquí cada actualización."
+              : "Estamos esperando la confirmación del local.";
 
   const repeatOrder = async () => {
     if (order.type !== "delivery") {
@@ -154,6 +170,36 @@ export default function OrderDetail() {
         )}
       </section>
 
+      {/* Resumen visual del estado */}
+      <section className="overflow-hidden rounded-3xl bg-card shadow-sm ring-1 ring-border">
+        <div className={`p-5 ${order.status === "cancelled" ? "bg-destructive/10" : order.status === "delivered" ? "bg-brand-soft" : "bg-gradient-to-r from-brand-soft via-card to-card"}`}>
+          <div className="flex items-start gap-3">
+            <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-2xl ${order.status === "cancelled" ? "bg-destructive/10" : "bg-card shadow-sm"}`}>
+              {order.status === "delivered" ? "✅" : order.status === "cancelled" ? "✕" : order.status === "picked_up" ? "🛵" : order.status === "ready" ? "📦" : order.status === "preparing" ? "👨‍🍳" : "🧾"}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-extrabold uppercase tracking-[0.16em] text-muted-foreground">{isActive ? "Seguimiento en vivo" : "Resumen del pedido"}</p>
+              <h2 className="mt-1 font-display text-xl font-extrabold">{statusMeta.label}</h2>
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{statusDescription}</p>
+            </div>
+            {isActive && <span className="mt-1 flex h-3 w-3 shrink-0 rounded-full bg-brand ring-4 ring-brand/10 animate-pulse-dot" />}
+          </div>
+          {order.status !== "cancelled" && (
+            <div className="mt-5">
+              <div className="mb-2 flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                <span>Progreso del pedido</span>
+                <span>{currentStep >= 0 ? `${currentStep + 1} de ${orderFlow.length}` : "En proceso"}</span>
+              </div>
+              <div className="flex gap-1.5" aria-label={`Progreso: ${statusMeta.label}`}>
+                {orderFlow.map((step, index) => (
+                  <span key={step} className={`h-1.5 flex-1 rounded-full ${index <= currentStep ? "bg-brand" : "bg-border"}`} />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* Quién lleva (o llevó) el pedido */}
       {courier && order.customerId === user?.id && (
         <section className="flex items-center gap-3 rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">
@@ -205,9 +251,7 @@ export default function OrderDetail() {
 
       {/* Línea de tiempo */}
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
-        <h2 className="font-display mb-4 text-base font-extrabold">
-          Estado del pedido
-        </h2>
+        <div className="mb-4 flex items-center justify-between gap-3"><h2 className="font-display text-base font-extrabold">Etapas del pedido</h2><span className="rounded-full bg-secondary px-3 py-1 text-[10px] font-extrabold uppercase tracking-wide text-muted-foreground">{order.type === "delivery" ? "A domicilio" : "Retiro en local"}</span></div>
         <StatusTimeline type={order.type} status={order.status} />
         {order.type === "delivery" && order.status === "picked_up" && liveLocation.data && !liveLocation.data.stale && (
           <div className="mt-4 rounded-2xl bg-brand-soft p-4 ring-1 ring-brand/20">
@@ -233,7 +277,7 @@ export default function OrderDetail() {
             <div className="mt-4 overflow-hidden rounded-2xl ring-1 ring-border">
               <iframe
                 title={liveLocation.data && !liveLocation.data.stale ? "Ubicación GPS del repartidor" : "Mapa del local"}
-                className="h-48 w-full"
+                className="h-56 w-full sm:h-64"
                 src={`https://www.openstreetmap.org/export/embed.html?bbox=${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng) - 0.015}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat) - 0.012}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng) + 0.015}%2C${(liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat) + 0.012}&layer=mapnik&marker=${liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lat : business?.lat ?? MILAGRO.lat}%2C${liveLocation.data && !liveLocation.data.stale ? liveLocation.data.lng : business?.lng ?? MILAGRO.lng}`}
               />
               <p className="bg-secondary px-3 py-2 text-[11px] font-bold text-muted-foreground">

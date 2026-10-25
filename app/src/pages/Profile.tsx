@@ -5,7 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
 import { APP_ROLES, IMAGE_RULES, type AppRole } from "@contracts/constants";
 import { toast } from "sonner";
-import { Camera, ShieldCheck } from "lucide-react";
+import { Camera, ShieldCheck, Bike, BadgeCheck, UserRound, Phone, Bell, SlidersHorizontal } from "lucide-react";
 import { getFirebaseVapidKey, getFirebaseWebConfig, loadPushClient } from "@/lib/push-client";
 
 export default function Profile() {
@@ -127,7 +127,12 @@ export default function Profile() {
   if (!isAuthenticated || !user) return null;
 
   return (
-    <div className="mx-auto max-w-lg space-y-4">
+    <div className="mx-auto w-full max-w-2xl space-y-4 sm:space-y-5">
+      <div className="rounded-3xl bg-brand-soft p-5 sm:p-6">
+        <p className="text-xs font-extrabold uppercase tracking-[0.16em] text-brand-dark/70">Al Rescate</p>
+        <h1 className="mt-1 font-display text-2xl font-extrabold text-brand-dark">Mi cuenta</h1>
+        <p className="mt-1 text-sm font-medium text-brand-dark/80">Administra tus datos y personaliza tu experiencia.</p>
+      </div>
       <section className="flex items-center gap-4 rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
         <span className="grid h-16 w-16 place-items-center overflow-hidden rounded-full bg-brand-soft text-2xl font-extrabold text-brand-dark">
           {user.avatar ? (
@@ -150,23 +155,42 @@ export default function Profile() {
 
       {user.appRole === "courier" && (
         <section className="space-y-4 rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
-          <div className="flex items-center gap-2"><Camera className="h-5 w-5 text-brand" /><h2 className="font-display text-base font-extrabold">Mi perfil de repartidor</h2></div>
-          <div className="flex items-center gap-4">
-            <div className="h-20 w-20 overflow-hidden rounded-full bg-secondary ring-1 ring-border">{photoUrl ? <img src={photoUrl} alt="Foto de perfil del repartidor" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-2xl">🏍️</div>}</div>
-            <label className="cursor-pointer rounded-xl border border-border px-4 py-2 text-sm font-bold hover:bg-secondary">{photoBusy ? "Subiendo…" : "Subir fotografía"}<input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={photoBusy} onChange={(e) => { void uploadCourierPhoto(e.target.files?.[0]); e.currentTarget.value = ""; }} /></label>
+          <div className="flex items-start gap-3">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-brand-soft text-brand-dark"><Bike className="h-5 w-5" /></span>
+            <div><h2 className="font-display text-base font-extrabold">Mi perfil de repartidor</h2><p className="mt-0.5 text-xs text-muted-foreground">Estos datos ayudan al cliente a reconocerte al recibir su pedido.</p></div>
           </div>
-          <p className="text-xs text-muted-foreground">La foto se comprime en el navegador y se sube directamente a R2 mediante una URL temporal.</p>
+          <div className="flex flex-col gap-4 rounded-2xl bg-secondary/60 p-4 sm:flex-row sm:items-center">
+            <div className="flex items-center gap-4">
+            <div className="h-20 w-20 overflow-hidden rounded-full bg-secondary ring-1 ring-border">{photoUrl ? <img src={photoUrl} alt="Foto de perfil del repartidor" className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-2xl">🏍️</div>}</div>
+            </div>
+            <label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2 text-sm font-bold transition-colors hover:bg-background focus-within:ring-2 focus-within:ring-brand">
+              <Camera className="h-4 w-4" />{photoBusy ? "Subiendo fotografía…" : photoUrl ? "Cambiar fotografía" : "Subir fotografía"}
+              <input type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={photoBusy} onChange={(e) => { void uploadCourierPhoto(e.target.files?.[0]); e.currentTarget.value = ""; }} />
+            </label>
+          </div>
+          <p className="text-xs text-muted-foreground">Formatos admitidos: JPG, PNG o WebP. La imagen se ajusta antes de subirla.</p>
           <label className="block text-xs font-bold">Vehículo<input value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="Ej. Motocicleta negra" maxLength={80} className="mt-1 w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-medium" /></label>
           <label className="block text-xs font-bold">Placa (opcional)<input value={plate} onChange={(e) => setPlate(e.target.value)} placeholder="Ej. GBA-1234" maxLength={20} className="mt-1 w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-medium" /></label>
-          <label className="block text-xs font-bold">Presentación<textarea value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Cuéntales algo breve a tus clientes…" maxLength={300} rows={3} className="mt-1 w-full rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-medium" /></label>
-          <div className="flex items-center gap-2 rounded-xl bg-secondary p-3 text-xs font-semibold"> <ShieldCheck className="h-4 w-4" /> Estado de revisión: {courierProfile.data?.courierApproved ? "Aprobado" : courierProfile.data?.courierVerification === "rejected" ? "Requiere cambios" : "Pendiente de revisión administrativa"}</div>
+          <label className="block text-xs font-bold">Presentación<textarea value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Cuéntales algo breve a tus clientes…" maxLength={300} rows={3} className="mt-1 w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm font-medium outline-none transition focus:ring-2 focus:ring-brand" /><span className="mt-1 block text-right text-[11px] font-medium text-muted-foreground">{bio.length}/300 caracteres</span></label>
+          <div className="overflow-hidden rounded-2xl border border-border">
+            <div className="flex items-center gap-2 border-b border-border bg-secondary/70 px-4 py-3"><UserRound className="h-4 w-4" /><p className="text-xs font-extrabold">Vista previa para tus clientes</p></div>
+            <div className="flex items-start gap-3 p-4">
+              <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-2xl bg-brand-soft text-xl font-extrabold text-brand-dark">{photoUrl ? <img src={photoUrl} alt="Vista previa del repartidor" className="h-full w-full object-cover" /> : (user.name ?? "R").trim().charAt(0).toUpperCase()}</div>
+              <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-1.5"><p className="truncate text-sm font-extrabold">{user.name ?? "Tu nombre"}</p><span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-extrabold text-emerald-800"><BadgeCheck className="h-3 w-3" />Repartidor</span></div>
+                <p className="mt-1 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"><Bike className="h-3.5 w-3.5" />{vehicle.trim() || "Tipo de vehículo por completar"}</p>
+                {plate.trim() && <p className="mt-1 inline-flex rounded-md border border-border bg-secondary px-2 py-1 font-mono text-[11px] font-extrabold tracking-wider">{plate.trim().toUpperCase()}</p>}
+                <p className="mt-2 whitespace-pre-wrap break-words text-xs text-muted-foreground">{bio.trim() || "Tu presentación aparecerá aquí para dar confianza a tus clientes."}</p>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-start gap-2 rounded-xl bg-secondary p-3 text-xs font-semibold"><ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" /><span>Estado de revisión: <strong>{courierProfile.data?.courierApproved ? "Aprobado" : courierProfile.data?.courierVerification === "rejected" ? "Requiere cambios" : "Pendiente de revisión administrativa"}</strong>{courierProfile.data?.courierVerification !== "rejected" && !courierProfile.data?.courierApproved ? " . El equipo revisará tus datos." : ""}</span></div>
           {courierProfile.data?.courierVerification === "rejected" && courierProfile.data.courierReviewNote && <p className="rounded-xl bg-destructive/10 p-3 text-xs font-bold text-destructive">Motivo: {courierProfile.data.courierReviewNote}. Corrige tus datos y guarda de nuevo para volver a revisión.</p>}
-          <button onClick={() => saveCourierProfile.mutate({ photoUrl: photoUrl || undefined, vehicle, plate, bio })} disabled={saveCourierProfile.isPending || photoBusy} className="w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50">{saveCourierProfile.isPending ? "Guardando…" : "Guardar perfil de repartidor"}</button>
+          <button onClick={() => saveCourierProfile.mutate({ photoUrl: photoUrl || undefined, vehicle: vehicle.trim(), plate: plate.trim().toUpperCase(), bio: bio.trim() })} disabled={saveCourierProfile.isPending || photoBusy} className="w-full rounded-xl bg-brand py-3.5 text-sm font-extrabold text-white shadow-sm transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">{saveCourierProfile.isPending ? "Guardando cambios…" : "Guardar perfil de repartidor"}</button>
         </section>
       )}
 
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
-        <h2 className="font-display text-base font-extrabold">Tu celular</h2>
+        <div className="mb-2 flex items-center gap-2"><Phone className="h-4 w-4 text-brand" /><h2 className="font-display text-base font-extrabold">Tu celular</h2></div>
         <p className="mb-2 text-xs font-semibold text-muted-foreground">
           Lo usan el local y el repartidor para coordinar contigo
         </p>
@@ -188,7 +212,7 @@ export default function Profile() {
       </section>
 
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
-        <h2 className="font-display text-base font-extrabold">Notificaciones push</h2>
+        <div className="flex items-center gap-2"><Bell className="h-4 w-4 text-brand" /><h2 className="font-display text-base font-extrabold">Notificaciones push</h2></div>
         <p className="mt-1 text-xs font-semibold text-muted-foreground">Recibe avisos cuando el local confirme tu pedido, lo preparen o el repartidor salga en camino. Actívalas en cada dispositivo que utilices.</p>
         {!firebaseWebConfigured && <p className="mt-3 rounded-xl bg-secondary p-3 text-xs font-semibold text-muted-foreground">Pendiente de configurar Firebase Web en las variables VITE_FIREBASE_* del archivo .env.</p>}
         {!pushStatus.data?.configured && <p className="mt-2 rounded-xl bg-secondary p-3 text-xs font-semibold text-muted-foreground">El servidor aún no tiene FIREBASE_SERVICE_ACCOUNT_JSON configurado.</p>}
@@ -199,7 +223,7 @@ export default function Profile() {
       </section>
 
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
-        <h2 className="font-display text-base font-extrabold">Modo de la app</h2>
+        <div className="mb-1 flex items-center gap-2"><SlidersHorizontal className="h-4 w-4 text-brand" /><h2 className="font-display text-base font-extrabold">Modo de la app</h2></div>
         <p className="mb-3 text-xs font-semibold text-muted-foreground">
           Cambia de rol para probar la demo completa con esta misma cuenta
         </p>

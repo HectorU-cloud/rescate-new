@@ -7,7 +7,7 @@ import { money } from "@/lib/format";
 import { toast } from "sonner";
 
 export default function Cart() {
-  const { cart, subtotal, setQty, clear } = useCart();
+  const { cart, subtotal, setQty, remove, clear } = useCart();
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
   const [address, setAddress] = useState("");
@@ -84,15 +84,40 @@ export default function Cart() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
-      <h1 className="font-display text-2xl font-extrabold">Tu pedido</h1>
+      <header className="space-y-4">
+        <div>
+          <p className="text-xs font-extrabold uppercase tracking-[0.18em] text-brand">Al Rescate · Tu compra</p>
+          <h1 className="font-display mt-1 text-3xl font-extrabold tracking-tight">Revisa tu pedido</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Confirma los productos y los datos de entrega antes de enviarlo al local.</p>
+        </div>
+        <ol aria-label="Pasos de compra" className="grid grid-cols-3 gap-2">
+          <li className="rounded-2xl border border-brand/30 bg-brand-soft px-3 py-3 text-center">
+            <span className="mx-auto grid h-7 w-7 place-items-center rounded-full bg-brand text-xs font-extrabold text-white">1</span>
+            <span className="mt-1 block text-xs font-extrabold text-brand-dark">Tu carrito</span>
+          </li>
+          <li className="rounded-2xl border border-border bg-card px-3 py-3 text-center">
+            <span className="mx-auto grid h-7 w-7 place-items-center rounded-full bg-secondary text-xs font-extrabold">2</span>
+            <span className="mt-1 block text-xs font-bold text-muted-foreground">Entrega</span>
+          </li>
+          <li className="rounded-2xl border border-border bg-card px-3 py-3 text-center">
+            <span className="mx-auto grid h-7 w-7 place-items-center rounded-full bg-secondary text-xs font-extrabold">3</span>
+            <span className="mt-1 block text-xs font-bold text-muted-foreground">Confirmación</span>
+          </li>
+        </ol>
+      </header>
 
-      <section className="rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">
-        <p className="mb-3 text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
-          {cart.businessName}
-        </p>
+      <section className="rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border sm:p-5">
+        <div className="mb-4 flex items-center gap-3 rounded-2xl bg-secondary/70 p-3">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-card text-xl shadow-sm">🏪</span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-muted-foreground">Pedido de</p>
+            <p className="truncate text-sm font-extrabold">{cart.businessName}</p>
+          </div>
+          <span className="rounded-full bg-card px-3 py-1 text-[10px] font-extrabold text-brand">Rescate</span>
+        </div>
         <ul className="space-y-3">
           {cart.items.map((i) => (
-            <li key={i.productId} className="flex items-center gap-3">
+            <li key={i.productId} className="flex items-center gap-3 rounded-2xl border border-border/70 p-3">
               <span className="grid h-11 w-11 place-items-center rounded-xl bg-secondary text-2xl">
                 {i.emoji}
               </span>
@@ -104,6 +129,7 @@ export default function Cart() {
               </div>
               <div className="flex items-center gap-1 rounded-full bg-secondary p-1">
                 <button
+                  aria-label={`Disminuir cantidad de ${i.name}`}
                   onClick={() => setQty(i.productId, i.quantity - 1)}
                   className="grid h-8 w-8 place-items-center rounded-full bg-card font-extrabold shadow-sm"
                 >
@@ -113,15 +139,17 @@ export default function Cart() {
                   {i.quantity}
                 </span>
                 <button
+                  aria-label={`Aumentar cantidad de ${i.name}`}
                   onClick={() => setQty(i.productId, i.quantity + 1)}
                   className="grid h-8 w-8 place-items-center rounded-full bg-card font-extrabold shadow-sm"
                 >
                   +
                 </button>
               </div>
-              <span className="w-16 text-right font-display text-sm font-extrabold">
-                {money(i.price * i.quantity)}
-              </span>
+              <div className="w-20 text-right">
+                <span className="block font-display text-sm font-extrabold">{money(i.price * i.quantity)}</span>
+                <button type="button" onClick={() => remove(i.productId)} className="mt-1 text-[10px] font-bold text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-destructive">Quitar</button>
+              </div>
             </li>
           ))}
         </ul>
@@ -204,7 +232,7 @@ export default function Cart() {
       </section>
 
       {/* Resumen */}
-      <section className="space-y-2 rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">
+      <section className="space-y-3 rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
         <div className="flex justify-between text-sm font-semibold text-muted-foreground">
           <span>Subtotal</span>
           <span>{money(subtotal)}</span>
@@ -220,12 +248,15 @@ export default function Cart() {
             Pedido mínimo: {money(q.minOrder)}
           </p>
         )}
-        <div className="flex justify-between border-t border-border pt-2 font-display text-lg font-extrabold">
-          <span>Total</span>
-          <span>{money(total)}</span>
+        <div className="flex items-end justify-between rounded-2xl bg-brand-soft p-4 text-brand-dark">
+          <div>
+            <p className="text-xs font-extrabold uppercase tracking-wide">Total a pagar</p>
+            <p className="mt-1 text-[11px] font-semibold opacity-80">Efectivo al recibir</p>
+          </div>
+          <span className="font-display text-2xl font-extrabold">{money(total)}</span>
         </div>
-        <p className="rounded-xl bg-secondary px-3 py-2 text-xs font-bold text-muted-foreground">
-          💵 Pagas en efectivo al recibir. Pago en línea: próximamente.
+        <p className="flex items-start gap-2 rounded-xl bg-secondary px-3 py-3 text-xs font-semibold text-muted-foreground">
+          <span aria-hidden="true">💵</span><span>Pagas en efectivo al recibir. Revisa tu dirección y teléfono para que el repartidor pueda coordinar la entrega. El pago en línea estará disponible próximamente.</span>
         </p>
       </section>
 
@@ -249,7 +280,7 @@ export default function Cart() {
             customerPhone: phone.trim() || undefined,
           });
         }}
-        className="safe-bottom sticky bottom-20 w-full rounded-2xl bg-brand py-4 font-display text-lg font-extrabold text-white shadow-lg transition-transform active:scale-[0.98] disabled:opacity-50 md:bottom-6"
+        className="safe-bottom sticky bottom-20 w-full rounded-2xl bg-brand py-4 font-display text-lg font-extrabold text-white shadow-lg shadow-brand/20 transition-transform hover:brightness-105 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 md:bottom-6"
       >
         {createOrder.isPending
           ? "Enviando…"
