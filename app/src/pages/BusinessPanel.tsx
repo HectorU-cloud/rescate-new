@@ -536,7 +536,9 @@ function OrdersTab({ businessId }: { businessId: number }) {
         const meta =
           ORDER_STATUS_LABELS[order.status as OrderStatusKey] ??
           ORDER_STATUS_LABELS.pending;
-        const next = NEXT_STEP[order.status];
+        const next = order.type === "delivery" && order.fulfillmentMethod === "pickup" && order.status === "ready"
+          ? "delivered"
+          : NEXT_STEP[order.status];
         return (
           <div
             key={order.id}
@@ -566,7 +568,9 @@ function OrdersTab({ businessId }: { businessId: number }) {
                 </li>
               ))}
             </ul>
-            {order.type === "delivery" ? (
+            {order.type === "delivery" && order.fulfillmentMethod === "pickup" ? (
+              <p className="mt-2 rounded-xl bg-brand-soft px-3 py-1.5 text-xs font-bold text-brand-dark">🏪 Retiro en local · el cliente recoge el pedido, no requiere repartidor.</p>
+            ) : order.type === "delivery" ? (
               <p className="mt-2 rounded-xl bg-secondary px-3 py-1.5 text-xs font-bold">
                 🛵 Llevar a: {order.deliveryAddress}
               </p>
@@ -611,7 +615,7 @@ function OrdersTab({ businessId }: { businessId: number }) {
               </div>
             )}
             <div className="mt-3 flex gap-2">
-              {next && !(order.type === "delivery" && order.status === "ready") && (
+              {next && !(order.type === "delivery" && order.fulfillmentMethod === "delivery" && order.status === "ready") && (
                 <button
                   disabled={
                     update.isPending ||
@@ -627,7 +631,7 @@ function OrdersTab({ businessId }: { businessId: number }) {
                   {NEXT_LABEL[next]}
                 </button>
               )}
-              {order.type === "delivery" && order.status === "ready" && (
+              {order.type === "delivery" && order.fulfillmentMethod === "delivery" && order.status === "ready" && (
                 <div className="flex-1 rounded-xl bg-brand-soft px-3 py-2.5 text-center text-xs font-extrabold text-brand-dark">
                   {order.courierPickupCode ? (
                     <>
@@ -640,7 +644,7 @@ function OrdersTab({ businessId }: { businessId: number }) {
                   )}
                 </div>
               )}
-              {(["pending", "accepted"].includes(order.status) || (order.type === "delivery" && ["preparing", "ready"].includes(order.status))) && (
+              {(["pending", "accepted"].includes(order.status) || (order.type === "delivery" && order.fulfillmentMethod === "delivery" && ["preparing", "ready"].includes(order.status))) && (
                 <button
                   disabled={update.isPending}
                   onClick={async () => {

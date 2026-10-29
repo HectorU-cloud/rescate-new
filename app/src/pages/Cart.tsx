@@ -10,6 +10,7 @@ export default function Cart() {
   const { cart, subtotal, setQty, remove, clear } = useCart();
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
+  const [fulfillmentMethod, setFulfillmentMethod] = useState<"delivery" | "pickup">("delivery");
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [phone, setPhone] = useState(user?.phone ?? "");
@@ -30,7 +31,7 @@ export default function Cart() {
   // El servidor calcula distancia, radio y tarifa; aquí solo se muestra la cotización.
   const quote = trpc.orders.quote.useQuery(
     { businessId: cart?.businessId ?? 0, lat: deliveryCoords?.lat ?? 0, lng: deliveryCoords?.lng ?? 0 },
-    { enabled: isAuthenticated && !!cart && !!deliveryCoords, retry: false },
+    { enabled: isAuthenticated && !!cart && fulfillmentMethod === "delivery" && !!deliveryCoords, retry: false },
   );
 
   const createOrder = trpc.orders.createDelivery.useMutation({
@@ -63,10 +64,11 @@ export default function Cart() {
   }
 
   const q = quote.data;
-  const deliveryFee = q?.fee ?? cart.deliveryFee;
-  const total = subtotal + deliveryFee;
+  const deliveryFee = fulfillmentMethod === "pickup" ? 0 : (q?.fee ?? cart.deliveryFee);
+  const serviceFee = 0.42; // Tarifa de servicio de lanzamiento, visible al cliente.
+  const total = subtotal + deliveryFee + serviceFee;
   const belowMin = !!q && subtotal < q.minOrder;
-  const blockReason = !deliveryCoords
+  const blockReason = fulfillmentMethod === "pickup" ? null : !deliveryCoords
     ? "Comparte tu ubicación para calcular el envío"
     : quote.isLoading
       ? "Calculando envío…"
@@ -78,7 +80,7 @@ export default function Cart() {
             ? `El local está cerrado (atiende de ${q.opensAt} a ${q.closesAt})`
             : belowMin
               ? `El pedido mínimo es ${money(q!.minOrder)}`
-              : address.trim().length < 5
+              : fulfillmentMethod === "delivery" && address.trim().length < 5
                 ? "Escribe tu dirección para continuar"
                 : null;
 
@@ -158,8 +160,13 @@ export default function Cart() {
       {/* Entrega */}
       <section className="space-y-3 rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">
         <p className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
-          ¿A dónde lo llevamos?
+          ¿Cómo quieres recibirlo?
         </p>
+        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary p-1">
+          <button type="button" onClick={() => setFulfillmentMethod("delivery")} className={`rounded-xl px-3 py-3 text-sm font-extrabold ${fulfillmentMethod === "delivery" ? "bg-card text-brand shadow-sm" : "text-muted-foreground"}`}>🛵 A domicilio</button>
+          <button type="button" onClick={() => { setFulfillmentMethod("pickup"); setDeliveryCoords(null); }} className={`rounded-xl px-3 py-3 text-sm font-extrabold ${fulfillmentMethod === "pickup" ? "bg-card text-brand shadow-sm" : "text-muted-foreground"}`}>🏪 Retirar en local</button>
+        </div>
+        {fulfillmentMethod === "delivery" ? <>
         <input
           value={address}
           onChange={(e) => setAddress(e.target.value)}
@@ -217,6 +224,7 @@ export default function Cart() {
             </button>
           </div>
         )}
+        </> : <div className="rounded-2xl bg-brand-soft p-4 text-sm font-semibold text-brand-dark">🏪 Recogerás tu pedido directamente en <strong>{cart.businessName}</strong>. No se asignará repartidor ni se cobrará envío. Revisa el horario del local antes de confirmar.</div>}
         <input
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
@@ -239,11 +247,12 @@ export default function Cart() {
         </div>
         <div className="flex justify-between text-sm font-semibold text-muted-foreground">
           <span>
-            Envío (va para el repartidor){q ? ` · ${q.distanceKm} km` : ""}
+            {fulfillmentMethod === "pickup" ? "Envío" : `Envío (va para el repartidor)${q ? ` · ${q.distanceKm} km` : ""}`}
           </span>
-          <span>{q ? money(deliveryFee) : "—"}</span>
+          <span>{fulfillmentMethod === "pickup" ? money(0) : q ? money(deliveryFee) : "—"}</span>
         </div>
-        {q && q.minOrder > 0 && (
+        <div className="flex justify-between text-sm font-semibold text-muted-foreground"><span>Tarifa de servicio de Rescate</span><span>{money(serviceFee)}</span></div>
+        {fulfillmentMethod === "delivery" && q && q.minOrder > 0 && (
           <p className={`text-xs font-bold ${belowMin ? "text-destructive" : "text-muted-foreground"}`}>
             Pedido mínimo: {money(q.minOrder)}
           </p>
@@ -251,12 +260,12 @@ export default function Cart() {
         <div className="flex items-end justify-between rounded-2xl bg-brand-soft p-4 text-brand-dark">
           <div>
             <p className="text-xs font-extrabold uppercase tracking-wide">Total a pagar</p>
-            <p className="mt-1 text-[11px] font-semibold opacity-80">Efectivo al recibir</p>
+            <p className="mt-1 text-[11px] font-semibold opacity-80">Efectivo {fulfillmentMethod === "pickup" ? "en el local" : "al recibir"}</p>
           </div>
           <span className="font-display text-2xl font-extrabold">{money(total)}</span>
         </div>
         <p className="flex items-start gap-2 rounded-xl bg-secondary px-3 py-3 text-xs font-semibold text-muted-foreground">
-          <span aria-hidden="true">💵</span><span>Pagas en efectivo al recibir. Revisa tu dirección y teléfono para que el repartidor pueda coordinar la entrega. El pago en línea estará disponible próximamente.</span>
+          <span aria-hidden="true">💵</span><span>{fulfillmentMethod === "pickup" ? "Pagas en efectivo al retirar tu pedido en el local. No se asignará repartidor." : "Pagas en efectivo al recibir. Revisa tu dirección y teléfono para que el repartidor pueda coordinar la entrega. El pago en línea estará disponible próximamente."}</span>
         </p>
       </section>
 
@@ -273,9 +282,8 @@ export default function Cart() {
               productId: i.productId,
               quantity: i.quantity,
             })),
-            deliveryAddress: address.trim(),
-            deliveryLat: deliveryCoords!.lat,
-            deliveryLng: deliveryCoords!.lng,
+            fulfillmentMethod,
+            ...(fulfillmentMethod === "delivery" ? { deliveryAddress: address.trim(), deliveryLat: deliveryCoords!.lat, deliveryLng: deliveryCoords!.lng } : {}),
             notes: notes.trim() || undefined,
             customerPhone: phone.trim() || undefined,
           });

@@ -72,10 +72,11 @@ export const ordersRouter = createRouter({
           )
           .min(1)
           .max(50),
-        deliveryAddress: z.string().min(5).max(300),
-        // Obligatorias: sin ellas no se puede calcular distancia, radio ni tarifa.
-        deliveryLat: z.number().min(-90).max(90),
-        deliveryLng: z.number().min(-180).max(180),
+        fulfillmentMethod: z.enum(["delivery", "pickup"]).default("delivery"),
+        deliveryAddress: z.string().max(300).optional(),
+        // Solo obligatorias para delivery; retiro en local no usa GPS ni tarifa de envío.
+        deliveryLat: z.number().min(-90).max(90).optional(),
+        deliveryLng: z.number().min(-180).max(180).optional(),
         notes: z.string().max(300).optional(),
         customerPhone: z.string().max(30).optional(),
       }),
@@ -91,8 +92,12 @@ export const ordersRouter = createRouter({
       if (!isBusinessOpenNow(business)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `El local está cerrado. Atiende de ${business.opensAt} a ${business.closesAt}.` });
       }
-      const quote = quoteDelivery(business, input.deliveryLat, input.deliveryLng);
-      if (!quote.withinRadius) {
+      const isPickup = input.fulfillmentMethod === "pickup";
+      if (!isPickup && (!input.deliveryAddress || input.deliveryAddress.trim().length < 5 || input.deliveryLat == null || input.deliveryLng == null)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Para entrega a domicilio debes indicar dirección y ubicación GPS." });
+      }
+      const quote = !isPickup ? quoteDelivery(business, input.deliveryLat!, input.deliveryLng!) : null;
+      if (quote && !quote.withinRadius) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Tu ubicación está a ${quote.distanceKm} km y este local entrega hasta ${quote.radiusKm} km.` });
       }
 
@@ -116,8 +121,9 @@ export const ordersRouter = createRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: `El pedido mínimo de este local es $${business.minOrder.toFixed(2)}.` });
       }
       // La tarifa la calcula siempre el servidor; el cliente no puede fijarla.
-      const deliveryFee = quote.fee;
-      const total = subtotal + deliveryFee;
+      const deliveryFee = quote?.fee ?? 0;
+      const serviceFee = 0.42; // Tarifa de lanzamiento al cliente; el negocio no paga comisión en esta fase.
+      const total = subtotal + deliveryFee + serviceFee;
 
       const orderId = await db.transaction(async (tx) => {
         await assertCustomerCanOrder(tx, ctx.user.id);
@@ -131,11 +137,13 @@ export const ordersRouter = createRouter({
             businessId: input.businessId,
             subtotal,
             deliveryFee,
+            fulfillmentMethod: input.fulfillmentMethod,
+            serviceFee,
             total,
-            deliveryAddress: input.deliveryAddress,
-            deliveryLat: input.deliveryLat,
-            deliveryLng: input.deliveryLng,
-            deliveryDistanceKm: quote.distanceKm,
+            deliveryAddress: isPickup ? null : input.deliveryAddress!.trim(),
+            deliveryLat: isPickup ? null : input.deliveryLat!,
+            deliveryLng: isPickup ? null : input.deliveryLng!,
+            deliveryDistanceKm: quote?.distanceKm ?? null,
             notes: input.notes ?? null,
             customerName: ctx.user.name ?? "Cliente",
             customerPhone: input.customerPhone ?? ctx.user.phone ?? null,
@@ -150,7 +158,7 @@ export const ordersRouter = createRouter({
       const created = await loadOrderWithRelations(orderId);
       if (created) await Promise.all([
         notifyOrderStatus({ customerId: ctx.user.id, orderId, code: created.order.code, status: "pending", type: "delivery" }),
-        sendPushToUser(business.ownerId, { title: "Nuevo pedido 🧾", body: `Tienes un nuevo pedido ${created.order.code} de delivery.`, url: "/panel", orderId }).catch((error) => console.error("Error avisando nuevo pedido al comercio:", error)),
+        sendPushToUser(business.ownerId, { title: "Nuevo pedido 🧾", body: `Tienes un nuevo pedido ${created.order.code} (${isPickup ? "retiro en local" : "a domicilio"}).`, url: "/panel", orderId }).catch((error) => console.error("Error avisando nuevo pedido al comercio:", error)),
       ]);
       return created;
     }),

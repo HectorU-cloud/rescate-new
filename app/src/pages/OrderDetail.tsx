@@ -97,9 +97,9 @@ export default function OrderDetail() {
     : order.status === "cancelled"
       ? "Este pedido ya no está en curso. Puedes revisar el detalle a continuación."
       : order.status === "picked_up"
-        ? "Tu pedido está en camino. Puedes consultar la ubicación más abajo."
+        ? order.fulfillmentMethod === "pickup" ? "El pedido está listo para retirar en el local." : "Tu pedido está en camino. Puedes consultar la ubicación más abajo."
         : order.status === "ready"
-          ? order.type === "delivery" ? "Tu pedido está listo y pronto saldrá hacia tu dirección." : "Tu rescate está listo para retirar en el local."
+          ? order.type === "delivery" ? (order.fulfillmentMethod === "pickup" ? "Tu pedido está listo para que lo retires en el local." : "Tu pedido está listo y pronto saldrá hacia tu dirección.") : "Tu rescate está listo para retirar en el local."
           : order.status === "preparing"
             ? "El local está preparando tu pedido con cuidado."
             : order.status === "accepted"
@@ -209,7 +209,7 @@ export default function OrderDetail() {
       </section>
 
       {/* Quién lleva (o llevó) el pedido */}
-      {courier && order.customerId === user?.id && (
+      {order.type === "delivery" && order.fulfillmentMethod === "delivery" && courier && order.customerId === user?.id && (
         <section className="flex items-center gap-3 rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">
           {courier.photoUrl ? (
             <img src={courier.photoUrl} alt={`Foto de ${courier.name ?? "tu repartidor"}`} className="h-16 w-16 shrink-0 rounded-2xl object-cover" />
@@ -248,7 +248,7 @@ export default function OrderDetail() {
         </section>
       )}
 
-      {order.type === "delivery" && order.status === "picked_up" && order.deliveryConfirmationCode && (
+      {order.type === "delivery" && order.fulfillmentMethod === "delivery" && order.status === "picked_up" && order.deliveryConfirmationCode && (
         <section className="rounded-3xl bg-brand-soft p-5 text-center ring-1 ring-brand/20">
           <p className="text-xs font-extrabold uppercase tracking-wide text-brand-dark">Código para confirmar tu entrega</p>
           <p className="font-display mt-2 text-4xl font-extrabold tracking-[0.3em] text-brand-dark">{order.deliveryConfirmationCode}</p>
@@ -259,9 +259,9 @@ export default function OrderDetail() {
 
       {/* Línea de tiempo */}
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
-        <div className="mb-4 flex items-center justify-between gap-3"><h2 className="font-display text-base font-extrabold">Etapas del pedido</h2><span className="rounded-full bg-secondary px-3 py-1 text-[10px] font-extrabold uppercase tracking-wide text-muted-foreground">{order.type === "delivery" ? "A domicilio" : "Retiro en local"}</span></div>
+        <div className="mb-4 flex items-center justify-between gap-3"><h2 className="font-display text-base font-extrabold">Etapas del pedido</h2><span className="rounded-full bg-secondary px-3 py-1 text-[10px] font-extrabold uppercase tracking-wide text-muted-foreground">{order.type === "delivery" ? (order.fulfillmentMethod === "pickup" ? "Retiro en local" : "A domicilio") : "Retiro en local"}</span></div>
         <StatusTimeline type={order.type} status={order.status} />
-        {order.type === "delivery" && order.status === "picked_up" && liveLocation.data && !liveLocation.data.stale && (
+        {order.type === "delivery" && order.fulfillmentMethod === "delivery" && order.status === "picked_up" && liveLocation.data && !liveLocation.data.stale && (
           <div className="mt-4 rounded-2xl bg-brand-soft p-4 ring-1 ring-brand/20">
             <p className="text-sm font-extrabold text-brand-dark">🛵 Seguimiento del repartidor</p>
             {liveLocation.data.etaMinutes != null ? (

@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { and, eq, inArray, notInArray, or } from "drizzle-orm";
+import { and, eq, notInArray, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
   authTokens,

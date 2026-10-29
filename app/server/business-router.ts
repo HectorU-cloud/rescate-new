@@ -301,10 +301,11 @@ export const businessRouter = createRouter({
       const allowed = BUSINESS_NEXT[order.status] ?? [];
       // Para delivery, el comercio no marca "delivered" (eso es del repartidor)
       const next = input.status as OrderStatus;
+      const pickupDelivery = order.type === "delivery" && order.fulfillmentMethod === "pickup" && order.status === "ready" && next === "delivered";
       const flow = allowed.filter(() =>
-        order.type === "delivery" && next === "delivered" ? false : true,
+        order.type === "delivery" && next === "delivered" && !pickupDelivery ? false : true,
       );
-      if (!flow.includes(next)) {
+      if (!flow.includes(next) && !pickupDelivery) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `No puedes pasar de "${order.status}" a "${next}"`,
@@ -355,7 +356,7 @@ export const businessRouter = createRouter({
         status: next,
         businessReminderSentAt: null,
         ...(next === "ready" ? { readyAt: new Date(), courierReminderSentAt: null } : {}),
-        ...(next === "ready" && order.type === "delivery" && !order.courierPickupCode
+        ...(next === "ready" && order.type === "delivery" && order.fulfillmentMethod === "delivery" && !order.courierPickupCode
           ? { courierPickupCode: String(randomInt(100000, 1000000)) }
           : {}),
         ...(next === "delivered" ? { deliveredAt: new Date() } : {}),
@@ -364,7 +365,7 @@ export const businessRouter = createRouter({
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: `status:${next}` });
       await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: next, type: order.type });
       // Pedido de delivery listo: avisar a los repartidores disponibles
-      if (next === "ready" && order.type === "delivery") await notifyCouriersOrderReady(order.id);
+      if (next === "ready" && order.type === "delivery" && order.fulfillmentMethod === "delivery") await notifyCouriersOrderReady(order.id);
       return { ok: true };
     }),
 

@@ -58,6 +58,7 @@ export const courierRouter = createRouter({
       .where(
         and(
           eq(orders.type, "delivery"),
+          eq(orders.fulfillmentMethod, "delivery"),
           eq(orders.status, "ready"),
           isNull(orders.courierId),
         ),
@@ -81,6 +82,7 @@ export const courierRouter = createRouter({
         where: and(
           eq(orders.id, input.orderId),
           eq(orders.type, "delivery"),
+          eq(orders.fulfillmentMethod, "delivery"),
           eq(orders.status, "ready"),
           isNull(orders.courierId),
         ),
@@ -140,6 +142,7 @@ export const courierRouter = createRouter({
           eq(orders.id, input.orderId),
           eq(orders.courierId, ctx.user.id),
           eq(orders.type, "delivery"),
+          eq(orders.fulfillmentMethod, "delivery"),
           eq(orders.status, "ready"),
         ),
       });
@@ -152,6 +155,7 @@ export const courierRouter = createRouter({
         .set({ codeAttempts: sql`${orders.codeAttempts} + 1`, updatedAt: order.updatedAt })
         .where(and(
           eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "ready"), eq(orders.type, "delivery"),
+          eq(orders.fulfillmentMethod, "delivery"),
           lt(orders.codeAttempts, BUSINESS_RULES.maxCodeAttempts),
         ));
       if (gate.affectedRows === 0) {
@@ -185,6 +189,7 @@ export const courierRouter = createRouter({
           eq(orders.id, order.id),
           eq(orders.courierId, ctx.user.id),
           eq(orders.type, "delivery"),
+          eq(orders.fulfillmentMethod, "delivery"),
           eq(orders.status, "ready"),
         ));
       if (done.affectedRows === 0) {
@@ -208,6 +213,7 @@ export const courierRouter = createRouter({
           eq(orders.courierId, ctx.user.id),
           inArray(orders.status, ["ready", "picked_up"]),
           eq(orders.type, "delivery"),
+          eq(orders.fulfillmentMethod, "delivery"),
         ),
       });
       if (!order) throw new TRPCError({ code: "BAD_REQUEST", message: "No tienes este pedido activo" });
@@ -281,6 +287,7 @@ export const courierRouter = createRouter({
           eq(orders.courierId, ctx.user.id),
           eq(orders.status, "picked_up"),
           eq(orders.type, "delivery"),
+          eq(orders.fulfillmentMethod, "delivery"),
         ),
       });
       if (!order) {
