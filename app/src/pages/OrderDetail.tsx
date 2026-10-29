@@ -260,7 +260,7 @@ export default function OrderDetail() {
       {/* Línea de tiempo */}
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
         <div className="mb-4 flex items-center justify-between gap-3"><h2 className="font-display text-base font-extrabold">Etapas del pedido</h2><span className="rounded-full bg-secondary px-3 py-1 text-[10px] font-extrabold uppercase tracking-wide text-muted-foreground">{order.type === "delivery" ? (order.fulfillmentMethod === "pickup" ? "Retiro en local" : "A domicilio") : "Retiro en local"}</span></div>
-        <StatusTimeline type={order.type} status={order.status} />
+        <StatusTimeline type={order.type} status={order.status} fulfillmentMethod={order.fulfillmentMethod ?? "delivery"} />
         {order.type === "delivery" && order.fulfillmentMethod === "delivery" && order.status === "picked_up" && liveLocation.data && !liveLocation.data.stale && (
           <div className="mt-4 rounded-2xl bg-brand-soft p-4 ring-1 ring-brand/20">
             <p className="text-sm font-extrabold text-brand-dark">🛵 Seguimiento del repartidor</p>
@@ -280,7 +280,7 @@ export default function OrderDetail() {
             <p className="mt-2 text-[11px] text-brand-dark/70">Estimación orientativa basada en distancia geográfica; el tráfico y la ruta real pueden cambiar el tiempo.</p>
           </div>
         )}
-        {order.type === "delivery" &&
+        {order.type === "delivery" && order.fulfillmentMethod === "delivery" &&
           ["ready", "picked_up"].includes(order.status) && (
             <div className="mt-4 overflow-hidden rounded-2xl ring-1 ring-border">
               <StaticMap

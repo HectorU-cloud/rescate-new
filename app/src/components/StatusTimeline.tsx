@@ -8,11 +8,18 @@ import {
 export function StatusTimeline({
   type,
   status,
+  fulfillmentMethod = "delivery",
 }: {
   type: "delivery" | "rescue";
   status: string;
+  fulfillmentMethod?: "delivery" | "pickup";
 }) {
-  const flow = type === "delivery" ? DELIVERY_FLOW : RESCUE_FLOW;
+  const isLocalPickup = type === "delivery" && fulfillmentMethod === "pickup";
+  const flow = type === "delivery"
+    ? isLocalPickup
+      ? ["pending", "accepted", "preparing", "ready", "delivered"] as OrderStatusKey[]
+      : DELIVERY_FLOW
+    : RESCUE_FLOW;
   const current = flow.indexOf(status as OrderStatusKey);
 
   if (status === "cancelled") {
@@ -27,9 +34,10 @@ export function StatusTimeline({
     <ol className="space-y-0">
       {flow.map((s, i) => {
         const meta = ORDER_STATUS_LABELS[s];
+        const label = isLocalPickup && s === "ready" ? "Listo para retirar" : isLocalPickup && s === "delivered" ? "Retirado" : meta.label;
+        const description = isLocalPickup && s === "ready" ? "Puedes recoger tu pedido en el local" : isLocalPickup && s === "delivered" ? "Has retirado tu pedido del local" : type === "delivery" ? meta.delivery : meta.rescue;
         const done = i <= current;
         const isCurrent = i === current;
-        const desc = type === "delivery" ? meta.delivery : meta.rescue;
         return (
           <li key={s} className="relative flex gap-3 pb-6 last:pb-0">
             {i < flow.length - 1 && (
@@ -54,10 +62,10 @@ export function StatusTimeline({
                   done ? "text-foreground" : "text-muted-foreground"
                 }`}
               >
-                {meta.label}
+                {label}
               </p>
               {isCurrent && (
-                <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
               )}
             </div>
           </li>

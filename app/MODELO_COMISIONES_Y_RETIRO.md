@@ -21,3 +21,9 @@
 
 ## Nota
 La tarifa USD 0,42 es configurable en el código como valor inicial, no una conclusión de rentabilidad. Antes de abrir al público hay que confirmar IVA/facturación y comprobar que el costo de soporte, infraestructura y cobro efectivo no supere el ingreso.
+
+## Ajuste de seguimiento: retiro de pedidos del menú
+
+Para pedidos `type=delivery` con `fulfillmentMethod=pickup`, el seguimiento del cliente debe usar estas etapas: Pendiente → Aceptado → Preparando → Listo para retirar → Retirado. No debe mostrar “En camino”, mapa GPS ni datos de repartidor. La confirmación de retirada se realiza desde el panel del comercio cuando el estado está en `ready`, pasando a `delivered`.
+
+Los pedidos a domicilio conservan el flujo: Pendiente → Aceptado → Preparando → Listo → En camino → Entregado.

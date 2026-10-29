@@ -8,13 +8,6 @@
       "when": 1792915589290,
       "tag": "0000_married_siren",
       "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1793242985300,
-      "tag": "0001_chubby_echo",
-      "breakpoints": true
     }
   ]
 }
