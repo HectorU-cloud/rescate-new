@@ -35,6 +35,11 @@ const EXPECTED = [
   "order_events.actorId -> users (set null)",
   "claims.resolvedBy -> users (set null)",
   "ratings.courierId -> users (set null)",
+  // Finanzas: conservar movimientos aunque se elimine el usuario/pedido de origen.
+  "finance_settings.updatedBy -> users (set null)",
+  "wallet_entries.createdBy -> users (set null)",
+  "wallet_entries.orderId -> orders (set null)",
+  "wallet_entries.reviewedBy -> users (set null)",
 ].sort();
 
 const tables = Object.values(schema).filter((v) => is(v, MySqlTable)) as unknown as MySqlTable[];
@@ -48,13 +53,17 @@ describe("integridad del esquema (claves foráneas)", () => {
   });
 
   it("toda columna que apunta a otra tabla tiene su clave foránea (así una relación nueva no queda sin proteger)", () => {
+    // wallet_entries.walletId es una referencia polimórfica: según walletType apunta a users.id
+    // (courier) o businesses.id (business). MySQL no permite una FK que apunte condicionalmente
+    // a dos tablas; la validación del tipo y la existencia se debe hacer en la capa de servicio.
+    const polymorphicReferences = new Set(["wallet_entries.walletId"]);
     const withFk = new Set(fks.map((f) => `${f.table}.${f.column}`));
     const unprotected: string[] = [];
     for (const table of tables) {
       const config = getTableConfig(table);
       for (const col of config.columns) {
         // Los ids de relación son bigint sin signo (como users.id); la clave primaria propia se llama "id"
-        if (col.getSQLType() === "bigint unsigned" && col.name !== "id" && !withFk.has(`${config.name}.${col.name}`)) {
+        if (col.getSQLType() === "bigint unsigned" && col.name !== "id" && !withFk.has(`${config.name}.${col.name}`) && !polymorphicReferences.has(`${config.name}.${col.name}`)) {
           unprotected.push(`${config.name}.${col.name}`);
         }
       }

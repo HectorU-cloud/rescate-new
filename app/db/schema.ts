@@ -401,3 +401,46 @@ export const ratings = mysqlTable(
 );
 
 export type Rating = typeof ratings.$inferSelect;
+
+
+// ---------------------------------------------------------------------------
+// Finanzas de Rescate: libro de movimientos (no almacenar saldos editables).
+// Los pagos de usuarios quedan pendientes hasta que un administrador los verifique.
+export const walletEntries = mysqlTable(
+  "wallet_entries",
+  {
+    id: serial("id").primaryKey(),
+    walletType: mysqlEnum("walletType", ["courier", "business"]).notNull(),
+    // courier: users.id; business: businesses.id
+    walletId: bigint("walletId", { mode: "number", unsigned: true }).notNull(),
+    entryType: mysqlEnum("entryType", ["charge", "payment", "adjustment"]).notNull(),
+    amount: double("amount").notNull(),
+    status: mysqlEnum("status", ["pending", "confirmed", "rejected"]).default("confirmed").notNull(),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).references(() => orders.id, { onDelete: "set null" }),
+    description: varchar("description", { length: 300 }).notNull(),
+    paymentReference: varchar("paymentReference", { length: 120 }),
+    proofUrl: text("proofUrl"),
+    reviewedBy: bigint("reviewedBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
+    reviewedAt: timestamp("reviewedAt"),
+    createdBy: bigint("createdBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ walletIdx: index("wallet_entry_wallet_idx").on(t.walletType, t.walletId), statusIdx: index("wallet_entry_status_idx").on(t.status), orderIdx: index("wallet_entry_order_idx").on(t.orderId) }),
+);
+
+// Configuración comercial editable por administración; fila singleton id=1.
+export const financeSettings = mysqlTable("finance_settings", {
+  id: serial("id").primaryKey(),
+  serviceFee: double("serviceFee").default(0.45).notNull(),
+  courierDebtLimit: double("courierDebtLimit").default(5).notNull(),
+  businessDebtLimit: double("businessDebtLimit").default(15).notNull(),
+  deliveryBaseFee: double("deliveryBaseFee").default(0.8).notNull(),
+  deliveryPerKm: double("deliveryPerKm").default(0.3).notNull(),
+  deliveryPerMinute: double("deliveryPerMinute").default(0.04).notNull(),
+  dynamicPricingEnabled: boolean("dynamicPricingEnabled").default(false).notNull(),
+  updatedBy: bigint("updatedBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export type WalletEntry = typeof walletEntries.$inferSelect;
+export type FinanceSettings = typeof financeSettings.$inferSelect;

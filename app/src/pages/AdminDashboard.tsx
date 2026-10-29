@@ -8,10 +8,11 @@ import { money, timeAgo } from "@/lib/format";
 import { toast } from "sonner";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "../../server/router";
+import AdminFinance from "@/pages/AdminFinance";
 
 type Overview = inferRouterOutputs<AppRouter>["admin"]["overview"];
 
-type Tab = "metricas" | "comercios" | "pedidos" | "reclamos";
+type Tab = "metricas" | "comercios" | "pedidos" | "reclamos" | "finanzas";
 
 const STATUS_LABEL: Record<string, string> = {
   pending: "Pendiente",
@@ -56,13 +57,14 @@ export default function AdminDashboard() {
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-secondary p-1 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-1 rounded-2xl bg-secondary p-1 md:grid-cols-5">
         {(
           [
             ["metricas", "📊 Métricas"],
             ["comercios", `🏪 Comercios${badge(o?.pendingBusinesses)}`],
             ["pedidos", "🧾 Pedidos"],
             ["reclamos", `🚩 Reclamos${badge(o?.openClaims)}`],
+            ["finanzas", "💰 Finanzas"],
           ] as [Tab, string][]
         ).map(([t, label]) => (
           <button
@@ -79,6 +81,7 @@ export default function AdminDashboard() {
       {tab === "comercios" && <BusinessesTab />}
       {tab === "pedidos" && <OrdersTab />}
       {tab === "reclamos" && <ClaimsTab />}
+      {tab === "finanzas" && <AdminFinance />}
     </div>
   );
 }

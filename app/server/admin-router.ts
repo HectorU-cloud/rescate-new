@@ -6,7 +6,7 @@ import { getDb } from "./queries/connection";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { logOrderEvent } from "./lib/order-events";
 import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
-import { businesses, claims, courierLocations, orderEvents, orders, ratings, users } from "@db/schema";
+import { businesses, claims, courierLocations, orderEvents, orders, ratings, users, walletEntries, financeSettings } from "@db/schema";
 
 const daysAgo = (n: number) => {
   const d = new Date();
@@ -18,6 +18,83 @@ const daysAgo = (n: number) => {
 const ACTIVE_STATUSES = ["pending", "accepted", "preparing", "ready", "picked_up"] as const;
 
 export const adminRouter = createRouter({
+  // --------------------------------------------------------------- Finanzas
+  financeSettings: adminQuery.query(async () => {
+    const db = getDb();
+    const [row] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
+    if (row) return row;
+    await db.insert(financeSettings).values({ id: 1, serviceFee: 0.45, courierDebtLimit: 5, businessDebtLimit: 15, deliveryBaseFee: 0.8, deliveryPerKm: 0.3, deliveryPerMinute: 0.04, dynamicPricingEnabled: false });
+    const [created] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
+    return created!;
+  }),
+
+  updateFinanceSettings: adminQuery.input(z.object({
+    serviceFee: z.number().min(0).max(10),
+    courierDebtLimit: z.number().min(0).max(10000),
+    businessDebtLimit: z.number().min(0).max(100000),
+    deliveryBaseFee: z.number().min(0).max(100),
+    deliveryPerKm: z.number().min(0).max(100),
+    deliveryPerMinute: z.number().min(0).max(10),
+    dynamicPricingEnabled: z.boolean(),
+  })).mutation(async ({ ctx, input }) => {
+    const db = getDb();
+    const [exists] = await db.select({ id: financeSettings.id }).from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
+    if (exists) {
+      await db.update(financeSettings).set({ ...input, updatedBy: ctx.user.id }).where(eq(financeSettings.id, 1));
+    } else {
+      await db.insert(financeSettings).values({ id: 1, ...input, updatedBy: ctx.user.id });
+    }
+    const [row] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
+    return row!;
+  }),
+
+  financeWallets: adminQuery.query(async () => {
+    const db = getDb();
+    const entries = await db.select({ walletType: walletEntries.walletType, walletId: walletEntries.walletId, entryType: walletEntries.entryType, amount: walletEntries.amount, status: walletEntries.status })
+      .from(walletEntries);
+    const couriers = await db.select({ id: users.id, name: users.name, email: users.email, phone: users.phone, courierApproved: users.courierApproved })
+      .from(users).where(eq(users.appRole, "courier"));
+    const biz = await db.select({ id: businesses.id, name: businesses.name, ownerId: businesses.ownerId, ownerName: users.name, ownerEmail: users.email, approvalStatus: businesses.approvalStatus })
+      .from(businesses).leftJoin(users, eq(users.id, businesses.ownerId));
+    const calculate = (type: "courier" | "business", id: number) => {
+      const own = entries.filter((e) => e.walletType === type && Number(e.walletId) === id);
+      const balance = own.filter((e) => e.status === "confirmed").reduce((sum, e) => sum + (e.entryType === "charge" ? Number(e.amount) : e.entryType === "payment" ? -Number(e.amount) : Number(e.amount)), 0);
+      const pendingPayments = own.filter((e) => e.entryType === "payment" && e.status === "pending").reduce((sum, e) => sum + Number(e.amount), 0);
+      return { balance: Math.round(balance * 100) / 100, pendingPayments: Math.round(pendingPayments * 100) / 100 };
+    };
+    return [
+      ...couriers.map((u) => ({ walletType: "courier" as const, walletId: u.id, name: u.name ?? "Repartidor sin nombre", email: u.email, phone: u.phone, active: u.courierApproved, ...calculate("courier", u.id) })),
+      ...biz.map((b) => ({ walletType: "business" as const, walletId: b.id, name: b.name, email: b.ownerEmail, phone: null, active: b.approvalStatus === "approved", ownerName: b.ownerName, ...calculate("business", b.id) })),
+    ].sort((a, b) => b.balance - a.balance);
+  }),
+
+  financeEntries: adminQuery.input(z.object({ walletType: z.enum(["courier", "business"]).optional(), walletId: z.number().int().positive().optional(), status: z.enum(["pending", "confirmed", "rejected"]).optional() }).optional()).query(async ({ input }) => {
+    const db = getDb();
+    const conditions = [];
+    if (input?.walletType) conditions.push(eq(walletEntries.walletType, input.walletType));
+    if (input?.walletId) conditions.push(eq(walletEntries.walletId, input.walletId));
+    if (input?.status) conditions.push(eq(walletEntries.status, input.status));
+    return db.select({ id: walletEntries.id, walletType: walletEntries.walletType, walletId: walletEntries.walletId, entryType: walletEntries.entryType, amount: walletEntries.amount, status: walletEntries.status, orderId: walletEntries.orderId, description: walletEntries.description, paymentReference: walletEntries.paymentReference, proofUrl: walletEntries.proofUrl, createdAt: walletEntries.createdAt, reviewedAt: walletEntries.reviewedAt })
+      .from(walletEntries).where(conditions.length ? and(...conditions) : undefined).orderBy(desc(walletEntries.createdAt)).limit(250);
+  }),
+
+  createFinanceEntry: adminQuery.input(z.object({ walletType: z.enum(["courier", "business"]), walletId: z.number().int().positive(), entryType: z.enum(["charge", "payment"]), amount: z.number().positive().max(100000), description: z.string().trim().min(3).max(300), paymentReference: z.string().trim().max(120).optional(), orderId: z.number().int().positive().optional() })).mutation(async ({ ctx, input }) => {
+    const db = getDb();
+    if (input.entryType === "charge") {
+      await db.insert(walletEntries).values({ ...input, status: "confirmed", createdBy: ctx.user.id });
+    } else {
+      await db.insert(walletEntries).values({ ...input, status: "pending", createdBy: ctx.user.id });
+    }
+    return { ok: true };
+  }),
+
+  reviewFinancePayment: adminQuery.input(z.object({ entryId: z.number().int().positive(), decision: z.enum(["confirmed", "rejected"]) })).mutation(async ({ ctx, input }) => {
+    const db = getDb();
+    const [entry] = await db.select().from(walletEntries).where(eq(walletEntries.id, input.entryId)).limit(1);
+    if (!entry || entry.entryType !== "payment" || entry.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "El pago ya fue revisado o no existe." });
+    await db.update(walletEntries).set({ status: input.decision, reviewedBy: ctx.user.id, reviewedAt: new Date() }).where(and(eq(walletEntries.id, input.entryId), eq(walletEntries.status, "pending")));
+    return { ok: true };
+  }),
   // ---------------------------------------------------------------- Métricas
   overview: adminQuery.query(async () => {
     const db = getDb();
