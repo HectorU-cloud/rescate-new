@@ -122,7 +122,7 @@ export const ordersRouter = createRouter({
       }
       // La tarifa la calcula siempre el servidor; el cliente no puede fijarla.
       const deliveryFee = quote?.fee ?? 0;
-      const serviceFee = 0.42; // Tarifa de lanzamiento al cliente; el negocio no paga comisión en esta fase.
+      const serviceFee = 0.45; // Tarifa de lanzamiento al cliente; el negocio no paga comisión en esta fase.
       const total = subtotal + deliveryFee + serviceFee;
 
       const orderId = await db.transaction(async (tx) => {

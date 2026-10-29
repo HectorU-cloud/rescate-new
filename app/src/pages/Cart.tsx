@@ -65,7 +65,7 @@ export default function Cart() {
 
   const q = quote.data;
   const deliveryFee = fulfillmentMethod === "pickup" ? 0 : (q?.fee ?? cart.deliveryFee);
-  const serviceFee = 0.42; // Tarifa de servicio de lanzamiento, visible al cliente.
+  const serviceFee = 0.45; // Tarifa de servicio de lanzamiento, visible al cliente.
   const total = subtotal + deliveryFee + serviceFee;
   const belowMin = !!q && subtotal < q.minOrder;
   const blockReason = fulfillmentMethod === "pickup" ? null : !deliveryCoords

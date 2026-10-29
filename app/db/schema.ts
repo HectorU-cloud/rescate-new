@@ -227,7 +227,7 @@ export const orders = mysqlTable(
     deliveryFee: double("deliveryFee").default(0).notNull(),
     // Modalidad para pedidos del menú: delivery asigna repartidor; pickup lo recoge el cliente.
     fulfillmentMethod: mysqlEnum("fulfillmentMethod", ["delivery", "pickup"]).default("delivery").notNull(),
-    // Tarifa de servicio de lanzamiento pagada por el cliente; 0.42 USD en esta fase.
+    // Tarifa de servicio de lanzamiento pagada por el cliente; 0.45 USD en esta fase.
     serviceFee: double("serviceFee").default(0).notNull(),
     total: double("total").notNull(),
     paymentMethod: mysqlEnum("paymentMethod", ["cash"]).default("cash")

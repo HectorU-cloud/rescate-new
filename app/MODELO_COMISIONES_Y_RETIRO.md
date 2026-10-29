@@ -2,7 +2,7 @@
 
 ## Decisión para el lanzamiento
 - Comisión al negocio: 0% durante la fase piloto. No se descuenta comisión del subtotal del comercio.
-- Tarifa de servicio al cliente: USD 0,42 por pedido, visible en el carrito. Es una tarifa inicial de prueba y debe validarse con costos reales, impuestos y asesoría contable antes de producción.
+- Tarifa de servicio al cliente: USD 0,45 por pedido, visible en el carrito. Es una tarifa inicial de prueba y debe validarse con costos reales, impuestos y asesoría contable antes de producción.
 - Envío: solo para pedidos a domicilio; el importe se registra en `deliveryFee` y corresponde al repartidor asignado.
 - Propina: no incluida; cuando se implemente, se debe separar del ingreso de Rescate.
 - Pago actual: efectivo. El flujo de tarjeta no se habilita con este cambio.
@@ -20,7 +20,7 @@
 5. Prueba: pedido a domicilio asigna repartidor y cobra envío; retiro no pide GPS, no muestra envío y nunca aparece en la cola de repartidores; el comercio puede marcar listo y entregado. Comprueba además que los totales históricos no se recalculen.
 
 ## Nota
-La tarifa USD 0,42 es configurable en el código como valor inicial, no una conclusión de rentabilidad. Antes de abrir al público hay que confirmar IVA/facturación y comprobar que el costo de soporte, infraestructura y cobro efectivo no supere el ingreso.
+La tarifa USD 0,45 es configurable en el código como valor inicial, no una conclusión de rentabilidad. Antes de abrir al público hay que confirmar IVA/facturación y comprobar que el costo de soporte, infraestructura y cobro efectivo no supere el ingreso.
 
 ## Ajuste de seguimiento: retiro de pedidos del menú
 
