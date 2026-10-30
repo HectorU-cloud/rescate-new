@@ -89,10 +89,10 @@ export async function sendPushToUser(userId: number, notification: { title: stri
   return { sent, skipped: false };
 }
 
-export async function notifyOrderStatus(args: { customerId: number; orderId: number; code: string; status: string; type: "delivery" | "rescue"; reason?: string }) {
+export async function notifyOrderStatus(args: { customerId: number; orderId: number; code: string; status: string; type: "delivery" | "rescue"; reason?: string; prepMinutes?: number }) {
   const details: Record<string, { title: string; body: string }> = {
     pending: { title: "Pedido recibido 🧾", body: `Recibimos tu pedido ${args.code}. Avisaremos cuando el local lo confirme.` },
-    accepted: args.type === "rescue" ? { title: "Pack reservado 🧡", body: `Tu pack ${args.code} quedó reservado para retirar en el local.` } : { title: "Pedido confirmado ✅", body: `El local confirmó tu pedido ${args.code}.` },
+    accepted: args.type === "rescue" ? { title: "Pack reservado 🧡", body: `Tu pack ${args.code} quedó reservado para retirar en el local.` } : { title: "Pedido confirmado ✅", body: `El local confirmó tu pedido ${args.code}.${args.prepMinutes ? ` Estará listo en unos ${args.prepMinutes} min.` : ""}` },
     preparing: { title: "¡Están preparando tu pedido! 👨‍🍳", body: `El local ya está preparando el pedido ${args.code}.` },
     ready: { title: args.type === "rescue" ? "Tu pack está listo 🧡" : "Tu pedido está listo 🍽️", body: args.type === "rescue" ? `Tu pack ${args.code} está listo para retirar.` : `El pedido ${args.code} está listo para el repartidor.` },
     picked_up: { title: "¡Tu pedido va en camino! 🛵", body: `El repartidor recogió tu pedido ${args.code}.` },

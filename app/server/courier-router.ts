@@ -5,6 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { getDb } from "./queries/connection";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
+import { assertWalletNotBlocked } from "./lib/wallet";
 import { releaseOrderFromCourier } from "./lib/orders";
 import { loadBusinessesByIds } from "./lib/business-queries";
 import { logOrderEvent } from "./lib/order-events";
@@ -78,6 +79,8 @@ export const courierRouter = createRouter({
       const db = getDb();
       const courier = await db.query.users.findFirst({ where: eq(users.id, ctx.user.id) });
       if (!courier?.courierApproved) throw new TRPCError({ code: "FORBIDDEN", message: "Tu perfil de repartidor está pendiente de aprobación administrativa." });
+      // Con deuda por encima del límite no se toman pedidos nuevos (ver Finanzas del admin).
+      await assertWalletNotBlocked("courier", ctx.user.id);
       const order = await db.query.orders.findFirst({
         where: and(
           eq(orders.id, input.orderId),

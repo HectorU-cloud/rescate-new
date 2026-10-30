@@ -9,6 +9,8 @@ import { BUSINESS_RULES } from "@contracts/constants";
 import { ChatBox } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 import { StaticMap } from "@/components/StaticMap";
+import WalletCard from "@/components/WalletCard";
+import { addDismissed, dismissedKey, parseDismissed, pruneDismissed } from "@/lib/dismissed-orders";
 
 const isLocked = (attempts: number) => attempts >= BUSINESS_RULES.maxCodeAttempts;
 
@@ -32,6 +34,27 @@ export default function CourierPanel() {
     refetchInterval: 10_000,
   });
   const earnings = trpc.courier.earnings.useQuery(undefined, { enabled });
+  // Pedidos que ocultó de su tablero en este dispositivo ("No me interesa").
+  const storageKey = user ? dismissedKey(user.id) : null;
+  const [dismissed, setDismissed] = useState<number[]>([]);
+  const [showHidden, setShowHidden] = useState(false);
+  useEffect(() => {
+    if (!storageKey) return;
+    try { setDismissed(parseDismissed(localStorage.getItem(storageKey))); } catch { /* sin almacenamiento */ }
+  }, [storageKey]);
+  const persistDismissed = (next: number[]) => {
+    setDismissed(next);
+    if (!storageKey) return;
+    try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch { /* sin almacenamiento: solo dura esta sesión */ }
+  };
+  useEffect(() => {
+    if (!available.data) return;
+    const kept = pruneDismissed(dismissed, available.data.map((x) => x.order.id));
+    if (kept.length !== dismissed.length) persistDismissed(kept);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [available.data]);
+  const boardOrders = (available.data ?? []).filter((x) => showHidden || !dismissed.includes(x.order.id));
+  const hiddenCount = (available.data ?? []).filter((x) => dismissed.includes(x.order.id)).length;
   const locationUpdate = trpc.courier.updateLocation.useMutation();
   const activeOrderIds = (mine.data ?? []).filter((d) => d.order.status === "picked_up").map((d) => d.order.id);
   const activeOrderKey = activeOrderIds.join(",");
@@ -141,6 +164,8 @@ export default function CourierPanel() {
           <span>El 100% del envío es tuyo</span>
         </div>
       </section>
+
+      <WalletCard />
 
       {/* Disponibilidad para recibir avisos */}
       <button
@@ -338,9 +363,9 @@ export default function CourierPanel() {
       {/* Disponibles */}
       <section className="space-y-3">
         <h2 className="text-xs font-extrabold uppercase tracking-wide text-muted-foreground">
-          Pedidos disponibles ({available.data?.length ?? 0})
+          Pedidos disponibles ({boardOrders.length})
         </h2>
-        {(available.data?.length ?? 0) === 0 ? (
+        {boardOrders.length === 0 ? (
           <div className="rounded-3xl bg-card p-8 text-center ring-1 ring-border">
             <p className="text-4xl">☕</p>
             <p className="font-display mt-2 font-extrabold">
@@ -351,7 +376,7 @@ export default function CourierPanel() {
             </p>
           </div>
         ) : (
-          available.data!.map(({ order, business }) => (
+          boardOrders.map(({ order, business }) => (
             <div
               key={order.id}
               className="flex items-center gap-3 rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border"
@@ -370,6 +395,11 @@ export default function CourierPanel() {
                   📍 {order.deliveryDistanceKm != null ? `A ${order.deliveryDistanceKm} km del local` : "Entrega a domicilio"} · cobras {money(order.total)} en efectivo
                 </p>
                 <p className="text-[11px] text-muted-foreground">La dirección del cliente se muestra al aceptar.</p>
+                {dismissed.includes(order.id) ? (
+                  <button type="button" onClick={() => persistDismissed(dismissed.filter((id) => id !== order.id))} className="mt-1 text-[11px] font-bold underline">Volver a mostrar</button>
+                ) : (
+                  <button type="button" onClick={() => persistDismissed(addDismissed(dismissed, order.id))} className="mt-1 text-[11px] font-bold text-muted-foreground underline">No me interesa</button>
+                )}
               </div>
               <button
                 disabled={accept.isPending}
@@ -380,6 +410,11 @@ export default function CourierPanel() {
               </button>
             </div>
           ))
+        )}
+        {hiddenCount > 0 && (
+          <button type="button" onClick={() => setShowHidden((v) => !v)} className="w-full rounded-xl bg-secondary py-2 text-xs font-extrabold">
+            {showHidden ? "Volver a ocultar los descartados" : `Hay ${hiddenCount} pedido${hiddenCount === 1 ? "" : "s"} oculto${hiddenCount === 1 ? "" : "s"} · Mostrar`}
+          </button>
         )}
       </section>
 

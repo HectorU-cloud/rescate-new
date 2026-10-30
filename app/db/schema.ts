@@ -248,6 +248,9 @@ export const orders = mysqlTable(
     deliveryRouteProvider: mysqlEnum("deliveryRouteProvider", ["google", "fallback"]),
     // Momento en que quedó "listo" (para el tiempo límite de espera de repartidor)
     readyAt: timestamp("readyAt"),
+    // Tiempo de preparación que el comercio indica al aceptar un pedido (minutos) y la hora estimada resultante.
+    prepMinutes: int("prepMinutes"),
+    estimatedReadyAt: timestamp("estimatedReadyAt"),
     courierReminderSentAt: timestamp("courierReminderSentAt"),
     // Intentos fallidos al confirmar el código de entrega (delivery) o de retiro (rescate)
     codeAttempts: int("codeAttempts").default(0).notNull(),

@@ -280,6 +280,12 @@ export default function OrderDetail() {
             <p className="mt-2 text-[11px] text-brand-dark/70">Estimación orientativa basada en distancia geográfica; el tráfico y la ruta real pueden cambiar el tiempo.</p>
           </div>
         )}
+        {order.type === "delivery" && order.estimatedReadyAt && ["accepted", "preparing"].includes(order.status) && (
+          <p className="mt-4 rounded-2xl bg-brand-soft px-4 py-3 text-sm font-bold text-brand-dark">
+            ⏱️ El local estima tenerlo listo a las {new Date(order.estimatedReadyAt).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}
+            {order.prepMinutes ? ` (unos ${order.prepMinutes} min)` : ""}.
+          </p>
+        )}
         {order.type === "delivery" && order.fulfillmentMethod === "delivery" &&
           ["ready", "picked_up"].includes(order.status) && (
             <div className="mt-4 overflow-hidden rounded-2xl ring-1 ring-border">

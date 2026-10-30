@@ -1,4 +1,6 @@
 import { useDialogs } from "@/providers/dialogs";
+import WalletCard from "@/components/WalletCard";
+import { DEFAULT_PREP_MINUTES, PREP_MINUTES_OPTIONS } from "@contracts/wallet";
 import { useState } from "react";
 import { Link } from "react-router";
 import { trpc } from "@/providers/trpc";
@@ -262,6 +264,8 @@ function Panel({
 
       <DeliveryRulesCard business={business} />
 
+      <WalletCard />
+
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
         <Stat label="Ventas de hoy (sin envío)" value={money(stats.data?.todaySales ?? 0)} />
@@ -457,6 +461,8 @@ function OrdersTab({ businessId }: { businessId: number }) {
   void businessId;
   const utils = trpc.useUtils();
   const [pickupCodes, setPickupCodes] = useState<Record<number, string>>({});
+  // Minutos de preparación elegidos por pedido al aceptarlo (por defecto, los habituales).
+  const [prepChoice, setPrepChoice] = useState<Record<number, number>>({});
   const list = trpc.business.orders.useQuery(
     { activeOnly: true },
     { refetchInterval: 10_000 },
@@ -614,6 +620,33 @@ function OrdersTab({ businessId }: { businessId: number }) {
                 ) : null}
               </div>
             )}
+            {order.status === "pending" && order.type === "delivery" && (
+              <div className="mt-3 rounded-xl bg-secondary p-3">
+                <p className="mb-2 text-xs font-extrabold">⏱️ ¿En cuánto estará listo?</p>
+                <div className="flex flex-wrap gap-2">
+                  {PREP_MINUTES_OPTIONS.map((m) => {
+                    const selected = (prepChoice[order.id] ?? DEFAULT_PREP_MINUTES) === m;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        aria-pressed={selected}
+                        onClick={() => setPrepChoice((c) => ({ ...c, [order.id]: m }))}
+                        className={`rounded-full px-3 py-1.5 text-xs font-extrabold ring-1 ring-border ${selected ? "bg-brand text-white" : "bg-card"}`}
+                      >
+                        {m} min
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-1.5 text-[11px] text-muted-foreground">Se lo mostramos al cliente cuando aceptes el pedido.</p>
+              </div>
+            )}
+            {order.estimatedReadyAt && ["accepted", "preparing"].includes(order.status) && (
+              <p className="mt-2 rounded-xl bg-brand-soft px-3 py-1.5 text-xs font-bold text-brand-dark">
+                ⏱️ Prometiste tenerlo listo a las {new Date(order.estimatedReadyAt).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}
+              </p>
+            )}
             <div className="mt-3 flex gap-2">
               {next && !(order.type === "delivery" && order.fulfillmentMethod === "delivery" && order.status === "ready") && (
                 <button
@@ -624,6 +657,7 @@ function OrdersTab({ businessId }: { businessId: number }) {
                   onClick={() => update.mutate({
                     orderId: order.id,
                     status: next,
+                    ...(next === "accepted" && order.type === "delivery" ? { prepMinutes: prepChoice[order.id] ?? DEFAULT_PREP_MINUTES } : {}),
                     ...(next === "delivered" && order.needsPickupCode ? { pickupCode: pickupCodes[order.id] } : {}),
                   })}
                   className="flex-1 rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50"

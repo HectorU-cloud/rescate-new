@@ -6,6 +6,8 @@ import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { getDb } from "./queries/connection";
 import { BUSINESS_RULES } from "@contracts/constants";
+import { MAX_PREP_MINUTES, MIN_PREP_MINUTES } from "@contracts/wallet";
+import { assertWalletNotBlocked } from "./lib/wallet";
 import { computePackExpiry, isPackExpired } from "@contracts/packs";
 import { distanceMeters, isInServiceArea } from "@contracts/geo";
 import { codesMatch } from "./lib/codes";
@@ -291,6 +293,8 @@ export const businessRouter = createRouter({
       reason: z.string().trim().max(300).optional(),
       // Código de retiro que el cliente muestra al recoger un rescate
       pickupCode: z.string().regex(/^\d{6}$/, "El código tiene 6 dígitos").optional(),
+      // Al aceptar un pedido a domicilio: en cuántos minutos estará listo (se le muestra al cliente).
+      prepMinutes: z.number().int().min(MIN_PREP_MINUTES).max(MAX_PREP_MINUTES).optional(),
     }))
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
@@ -312,6 +316,10 @@ export const businessRouter = createRouter({
           message: `No puedes pasar de "${order.status}" a "${next}"`,
         });
       }
+      // Con deuda por encima del límite no se aceptan pedidos nuevos (ver Finanzas del admin).
+      if (next === "accepted") await assertWalletNotBlocked("business", biz.id);
+      // Tiempo de preparación: solo al aceptar un pedido a domicilio.
+      const prep = next === "accepted" && order.type === "delivery" && input.prepMinutes ? input.prepMinutes : null;
       if (next === "cancelled") {
         if (!canBusinessCancel(order.type, order.status)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido ya no se puede cancelar desde el local" });
@@ -356,6 +364,7 @@ export const businessRouter = createRouter({
       const [res] = await db.transaction(async (tx) => {
         const [updated] = await tx.update(orders).set({
           status: next,
+          ...(prep ? { prepMinutes: prep, estimatedReadyAt: new Date(Date.now() + prep * 60_000) } : {}),
           businessReminderSentAt: null,
           ...(next === "ready" ? { readyAt: new Date(), courierReminderSentAt: null } : {}),
           ...(next === "ready" && order.type === "delivery" && order.fulfillmentMethod === "delivery" && !order.courierPickupCode
@@ -374,7 +383,7 @@ export const businessRouter = createRouter({
       });
       if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido cambió de estado. Actualiza la pantalla." });
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: `status:${next}` });
-      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: next, type: order.type });
+      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: next, type: order.type, prepMinutes: prep ?? undefined });
       // Pedido de delivery listo: avisar a los repartidores disponibles
       if (next === "ready" && order.type === "delivery" && order.fulfillmentMethod === "delivery") await notifyCouriersOrderReady(order.id);
       return { ok: true };

@@ -8,6 +8,7 @@ import { notificationsRouter } from "./notifications-router";
 import { ordersRouter } from "./orders-router";
 import { profileRouter } from "./profile-router";
 import { pushRouter } from "./push-router";
+import { walletRouter } from "./wallet-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -16,6 +17,7 @@ export const appRouter = createRouter({
   profile: profileRouter,
   push: pushRouter,
   notifications: notificationsRouter,
+  wallet: walletRouter,
   catalog: catalogRouter,
   orders: ordersRouter,
   chat: chatRouter,
