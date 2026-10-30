@@ -35,3 +35,18 @@ Haz una copia de seguridad antes de aplicar cambios a una base de datos con dato
 2. Generar cargos automáticamente de forma idempotente al cerrar pedidos.
 3. Implementar bloqueos con aviso, umbral configurable y protección de pedidos en curso.
 4. Cotizador de rutas y después clima/demanda, con máximos y precio visible antes de confirmar.
+
+## Endurecimiento posterior (validación de cuentas)
+- Antes de crear un movimiento, el servidor comprueba que el monedero exista y corresponda al tipo seleccionado (repartidor o comercio).
+- Si se vincula un pedido, también verifica que el pedido exista.
+- Esto protege la referencia polimórfica `wallet_entries.walletId`, que no puede tener una única clave foránea SQL hacia dos tablas distintas.
+- Sigue pendiente implementar cargos automáticos idempotentes y pruebas de integración contra la base de datos real antes de activar cobros en producción.
+
+## Automatización de cargos al completar pedidos
+
+- Pedido de menú a domicilio (`type=delivery`, `fulfillmentMethod=delivery`): al confirmar la entrega con el código del cliente, se crea un cargo confirmado por `serviceFee` en el monedero del repartidor asignado.
+- Pedido de menú para retirar (`type=delivery`, `fulfillmentMethod=pickup`): al confirmar el retiro desde el panel del comercio, se crea un cargo confirmado por `serviceFee` en el monedero del comercio.
+- Packs de rescate (`type=rescue`): no generan cargo automático de tarifa de servicio.
+- El cambio de estado a `delivered` y el movimiento se ejecutan en una misma transacción. La actualización condicional del estado evita que una segunda confirmación registre otro cargo.
+
+La tarifa se toma del valor `serviceFee` guardado en el pedido, no del valor actual de configuración, para respetar el precio que el cliente aceptó al realizarlo.

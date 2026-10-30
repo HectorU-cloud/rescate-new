@@ -27,22 +27,29 @@ export type DeliveryQuote = {
   withinRadius: boolean;
   radiusKm: number;
   minOrder: number;
+  estimatedMinutes: number;
+  baseFee: number;
+  distanceFee: number;
+  timeFee: number;
 };
+
+export type DeliveryPricing = { baseFee: number; perKm: number; perMinute: number; minFee?: number; maxFee?: number };
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Distancia estimada por calles y tarifa = base + costo por km. */
-export function quoteDelivery(business: DeliveryBusiness, destLat: number, destLng: number): DeliveryQuote {
+export function quoteDelivery(business: DeliveryBusiness, destLat: number, destLng: number, pricing?: DeliveryPricing): DeliveryQuote {
   const straight = haversineKm(business.lat, business.lng, destLat, destLng);
   const distanceKm = Math.round(straight * BUSINESS_RULES.routeFactor * 10) / 10;
-  const fee = round2(business.deliveryFee + business.feePerKm * distanceKm);
-  return {
-    distanceKm,
-    fee,
-    withinRadius: distanceKm <= business.deliveryRadiusKm,
-    radiusKm: business.deliveryRadiusKm,
-    minOrder: business.minOrder,
-  };
+  // ETA orientativa: velocidad urbana conservadora de 20 km/h + 5 min de preparación/salida.
+  // Se sustituirá por Routes API cuando se conecte un proveedor de rutas real.
+  const estimatedMinutes = Math.max(5, Math.ceil((distanceKm / 20) * 60 + 5));
+  const baseFee = pricing?.baseFee ?? business.deliveryFee;
+  const distanceFee = pricing ? pricing.perKm * distanceKm : business.feePerKm * distanceKm;
+  const timeFee = pricing ? pricing.perMinute * estimatedMinutes : 0;
+  const rawFee = baseFee + distanceFee + timeFee;
+  const fee = round2(pricing ? Math.min(pricing.maxFee ?? 12, Math.max(pricing.minFee ?? 1.5, rawFee)) : rawFee);
+  return { distanceKm, fee, estimatedMinutes, baseFee: round2(baseFee), distanceFee: round2(distanceFee), timeFee: round2(timeFee), withinRadius: distanceKm <= business.deliveryRadiusKm, radiusKm: business.deliveryRadiusKm, minOrder: business.minOrder };
 }
 
 function toMinutes(hhmm: string) {

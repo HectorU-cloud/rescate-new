@@ -12,7 +12,7 @@ import { redactForCourierBoard } from "./lib/order-privacy";
 import { codesMatch } from "./lib/codes";
 import { MAX_ACTIVE_DELIVERIES, canCourierRelease, hasReachedActiveLimit } from "./lib/order-rules";
 import { BUSINESS_RULES } from "@contracts/constants";
-import { businesses, courierLocations, orderEvents, orderItems, orders, users } from "@db/schema";
+import { businesses, courierLocations, orderEvents, orderItems, orders, users, walletEntries } from "@db/schema";
 
 
 export const courierRouter = createRouter({
@@ -318,8 +318,18 @@ export const courierRouter = createRouter({
             : "El código no coincide y se agotaron los intentos. Pide al cliente que genere un código nuevo.",
         });
       }
-      const [done] = await db.update(orders).set({ status: "delivered", deliveryConfirmationCode: null, deliveredAt: new Date() })
-        .where(and(eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
+      const [done] = await db.transaction(async (tx) => {
+        const [updated] = await tx.update(orders).set({ status: "delivered", deliveryConfirmationCode: null, deliveredAt: new Date() })
+          .where(and(eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
+        if (updated.affectedRows > 0 && order.type === "delivery" && Number(order.serviceFee) > 0) {
+          await tx.insert(walletEntries).values({
+            walletType: "courier", walletId: ctx.user.id, entryType: "charge",
+            amount: Number(order.serviceFee), status: "confirmed", orderId: order.id,
+            description: `Tarifa de servicio del pedido ${order.code}`,
+          });
+        }
+        return [updated] as const;
+      });
       if (done.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido ya cambió de estado" });
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "status:delivered" });
       await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "delivered", type: order.type });

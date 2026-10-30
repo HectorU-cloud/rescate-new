@@ -24,6 +24,7 @@ import {
   ratings,
   rescuePacks,
   users,
+  walletEntries,
   type OrderStatus,
 } from "@db/schema";
 
@@ -352,15 +353,25 @@ export const businessRouter = createRouter({
           });
         }
       }
-      const [res] = await db.update(orders).set({
-        status: next,
-        businessReminderSentAt: null,
-        ...(next === "ready" ? { readyAt: new Date(), courierReminderSentAt: null } : {}),
-        ...(next === "ready" && order.type === "delivery" && order.fulfillmentMethod === "delivery" && !order.courierPickupCode
-          ? { courierPickupCode: String(randomInt(100000, 1000000)) }
-          : {}),
-        ...(next === "delivered" ? { deliveredAt: new Date() } : {}),
-      }).where(and(eq(orders.id, order.id), eq(orders.status, order.status))); // evita carreras con cancelaciones
+      const [res] = await db.transaction(async (tx) => {
+        const [updated] = await tx.update(orders).set({
+          status: next,
+          businessReminderSentAt: null,
+          ...(next === "ready" ? { readyAt: new Date(), courierReminderSentAt: null } : {}),
+          ...(next === "ready" && order.type === "delivery" && order.fulfillmentMethod === "delivery" && !order.courierPickupCode
+            ? { courierPickupCode: String(randomInt(100000, 1000000)) }
+            : {}),
+          ...(next === "delivered" ? { deliveredAt: new Date() } : {}),
+        }).where(and(eq(orders.id, order.id), eq(orders.status, order.status)));
+        if (updated.affectedRows > 0 && next === "delivered" && order.type === "delivery" && order.fulfillmentMethod === "pickup" && Number(order.serviceFee) > 0) {
+          await tx.insert(walletEntries).values({
+            walletType: "business", walletId: order.businessId, entryType: "charge",
+            amount: Number(order.serviceFee), status: "confirmed", orderId: order.id,
+            description: `Tarifa de servicio del pedido ${order.code} (retiro en local)`,
+          });
+        }
+        return [updated] as const;
+      });
       if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido cambió de estado. Actualiza la pantalla." });
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: `status:${next}` });
       await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: next, type: order.type });

@@ -24,6 +24,18 @@ describe("quoteDelivery", () => {
     expect(q.withinRadius).toBe(true);
     expect(q.minOrder).toBe(5);
   });
+  it("calcula tarifa configurable por base, kilómetros y minutos con límites", () => {
+    const q = quoteDelivery(biz, -2.134 + 0.01, -79.594, { baseFee: 0.8, perKm: 0.3, perMinute: 0.04, minFee: 1.5, maxFee: 12 });
+    expect(q.estimatedMinutes).toBeGreaterThanOrEqual(5);
+    expect(q.baseFee).toBe(0.8);
+    expect(q.distanceFee).toBeCloseTo(0.3 * q.distanceKm, 2);
+    expect(q.timeFee).toBeCloseTo(0.04 * q.estimatedMinutes, 2);
+    expect(q.fee).toBeCloseTo(Math.max(1.5, 0.8 + q.distanceFee + q.timeFee), 2);
+  });
+  it("respeta el tope máximo de tarifa", () => {
+    const q = quoteDelivery(biz, -2.134 + 0.01, -79.594, { baseFee: 10, perKm: 10, perMinute: 1, minFee: 1.5, maxFee: 12 });
+    expect(q.fee).toBe(12);
+  });
   it("marca fuera de radio cuando supera el límite", () => {
     const q = quoteDelivery(biz, -2.134 + 0.05, -79.594); // ~7 km por calles
     expect(q.withinRadius).toBe(false);

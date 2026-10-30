@@ -18,6 +18,7 @@ import { shouldShowCourier, toPublicCourier } from "./lib/courier-public";
 import { getDb } from "./queries/connection";
 import {
   businesses,
+  financeSettings,
   claims,
   courierLocations,
   orderItems,
@@ -96,7 +97,9 @@ export const ordersRouter = createRouter({
       if (!isPickup && (!input.deliveryAddress || input.deliveryAddress.trim().length < 5 || input.deliveryLat == null || input.deliveryLng == null)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Para entrega a domicilio debes indicar dirección y ubicación GPS." });
       }
-      const quote = !isPickup ? quoteDelivery(business, input.deliveryLat!, input.deliveryLng!) : null;
+      const [pricingSettings] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
+      const pricing = pricingSettings ? { baseFee: Number(pricingSettings.deliveryBaseFee), perKm: Number(pricingSettings.deliveryPerKm), perMinute: Number(pricingSettings.deliveryPerMinute), minFee: 1.5, maxFee: 12 } : undefined;
+      const quote = !isPickup ? quoteDelivery(business, input.deliveryLat!, input.deliveryLng!, pricing) : null;
       if (quote && !quote.withinRadius) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Tu ubicación está a ${quote.distanceKm} km y este local entrega hasta ${quote.radiusKm} km.` });
       }
@@ -261,10 +264,13 @@ export const ordersRouter = createRouter({
       lng: z.number().min(-180).max(180),
     }))
     .query(async ({ input }) => {
-      const business = await getDb().query.businesses.findFirst({ where: eq(businesses.id, input.businessId) });
+      const db = getDb();
+      const business = await db.query.businesses.findFirst({ where: eq(businesses.id, input.businessId) });
       if (!business || !isBusinessPublic(business)) throw new TRPCError({ code: "NOT_FOUND", message: "El local no está disponible" });
+      const [settings] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
+      const pricing = settings ? { baseFee: Number(settings.deliveryBaseFee), perKm: Number(settings.deliveryPerKm), perMinute: Number(settings.deliveryPerMinute), minFee: 1.5, maxFee: 12 } : undefined;
       return {
-        ...quoteDelivery(business, input.lat, input.lng),
+        ...quoteDelivery(business, input.lat, input.lng, pricing),
         openNow: isBusinessOpenNow(business),
         opensAt: business.opensAt,
         closesAt: business.closesAt,

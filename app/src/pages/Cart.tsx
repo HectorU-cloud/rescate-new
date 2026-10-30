@@ -251,6 +251,14 @@ export default function Cart() {
           </span>
           <span>{fulfillmentMethod === "pickup" ? money(0) : q ? money(deliveryFee) : "—"}</span>
         </div>
+        {fulfillmentMethod === "delivery" && q && (
+          <div className="rounded-xl bg-secondary/50 px-3 py-2 text-xs text-muted-foreground">
+            <div className="flex justify-between"><span>Tarifa base</span><span>{money(q.baseFee)}</span></div>
+            <div className="flex justify-between"><span>Distancia ({q.distanceKm} km)</span><span>{money(q.distanceFee)}</span></div>
+            <div className="flex justify-between"><span>Tiempo estimado ({q.estimatedMinutes} min)</span><span>{money(q.timeFee)}</span></div>
+            <p className="mt-1">Tiempo referencial; puede variar según tráfico y condiciones de la vía.</p>
+          </div>
+        )}
         <div className="flex justify-between text-sm font-semibold text-muted-foreground"><span>Tarifa de servicio de Rescate</span><span>{money(serviceFee)}</span></div>
         {fulfillmentMethod === "delivery" && q && q.minOrder > 0 && (
           <p className={`text-xs font-bold ${belowMin ? "text-destructive" : "text-muted-foreground"}`}>

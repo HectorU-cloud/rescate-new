@@ -80,6 +80,24 @@ export const adminRouter = createRouter({
 
   createFinanceEntry: adminQuery.input(z.object({ walletType: z.enum(["courier", "business"]), walletId: z.number().int().positive(), entryType: z.enum(["charge", "payment"]), amount: z.number().positive().max(100000), description: z.string().trim().min(3).max(300), paymentReference: z.string().trim().max(120).optional(), orderId: z.number().int().positive().optional() })).mutation(async ({ ctx, input }) => {
     const db = getDb();
+
+    // walletId is polymorphic, so validate both the account type and its existence here.
+    // A normal SQL foreign key cannot conditionally point to users or businesses.
+    if (input.walletType === "courier") {
+      const [wallet] = await db.select({ id: users.id }).from(users)
+        .where(and(eq(users.id, input.walletId), eq(users.appRole, "courier"))).limit(1);
+      if (!wallet) throw new TRPCError({ code: "BAD_REQUEST", message: "El repartidor seleccionado no existe o no tiene el rol de repartidor." });
+    } else {
+      const [wallet] = await db.select({ id: businesses.id }).from(businesses)
+        .where(eq(businesses.id, input.walletId)).limit(1);
+      if (!wallet) throw new TRPCError({ code: "BAD_REQUEST", message: "El comercio seleccionado no existe." });
+    }
+
+    if (input.orderId !== undefined) {
+      const [order] = await db.select({ id: orders.id }).from(orders).where(eq(orders.id, input.orderId)).limit(1);
+      if (!order) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido asociado no existe." });
+    }
+
     if (input.entryType === "charge") {
       await db.insert(walletEntries).values({ ...input, status: "confirmed", createdBy: ctx.user.id });
     } else {
