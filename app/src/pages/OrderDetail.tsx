@@ -287,7 +287,9 @@ export default function OrderDetail() {
                 lat={mapPoint.lat}
                 lng={mapPoint.lng}
                 emoji={mapPoint.live ? "🛵" : "🏪"}
-                label={mapPoint.live ? "Ubicación GPS del repartidor" : "Mapa del local"}
+                label={mapPoint.live ? "Ubicación GPS del repartidor y destino" : "Local y destino del pedido"}
+                destinationLat={order.deliveryLat}
+                destinationLng={order.deliveryLng}
                 className="h-56 w-full sm:h-64"
               />
               <p className="bg-secondary px-3 py-2 text-[11px] font-bold text-muted-foreground">
@@ -296,6 +298,9 @@ export default function OrderDetail() {
                   : liveLocation.data?.stale
                     ? "⚠️ La última ubicación está desactualizada. Mostramos el local hasta recibir una nueva señal GPS."
                     : "📍 Mostramos el local. La ubicación del repartidor aparecerá cuando active el GPS durante la entrega."}
+              </p>
+              <p className="bg-secondary/60 px-3 py-2 text-[10px] text-muted-foreground">
+                La línea punteada es una referencia visual entre el origen y el destino; no representa todavía una ruta por calles.
               </p>
             </div>
           )}
