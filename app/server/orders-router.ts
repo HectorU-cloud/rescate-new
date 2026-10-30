@@ -10,7 +10,8 @@ import { loadBusinessesByIds } from "./lib/business-queries";
 import { toPublicBusiness } from "./lib/public-business";
 import { isPackExpired } from "@contracts/packs";
 import { notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
-import { isBusinessOpenNow, isBusinessPublic, isPackReservable, quoteDelivery } from "./lib/business-rules";
+import { isBusinessOpenNow, isBusinessPublic, isPackReservable } from "./lib/business-rules";
+import { quoteDeliveryWithGoogleRoutes } from "./lib/google-routes";
 import { logOrderEvent } from "./lib/order-events";
 import { recomputeBusinessRating, recomputeCourierRating } from "./lib/ratings";
 import { canCustomerCancel } from "./lib/order-rules";
@@ -99,7 +100,7 @@ export const ordersRouter = createRouter({
       }
       const [pricingSettings] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
       const pricing = pricingSettings ? { baseFee: Number(pricingSettings.deliveryBaseFee), perKm: Number(pricingSettings.deliveryPerKm), perMinute: Number(pricingSettings.deliveryPerMinute), minFee: 1.5, maxFee: 12 } : undefined;
-      const quote = !isPickup ? quoteDelivery(business, input.deliveryLat!, input.deliveryLng!, pricing) : null;
+      const quote = !isPickup ? await quoteDeliveryWithGoogleRoutes(business, input.deliveryLat!, input.deliveryLng!, pricing) : null;
       if (quote && !quote.withinRadius) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Tu ubicación está a ${quote.distanceKm} km y este local entrega hasta ${quote.radiusKm} km.` });
       }
@@ -147,6 +148,8 @@ export const ordersRouter = createRouter({
             deliveryLat: isPickup ? null : input.deliveryLat!,
             deliveryLng: isPickup ? null : input.deliveryLng!,
             deliveryDistanceKm: quote?.distanceKm ?? null,
+            deliveryDurationMinutes: quote?.estimatedMinutes ?? null,
+            deliveryRouteProvider: quote?.routeProvider ?? null,
             notes: input.notes ?? null,
             customerName: ctx.user.name ?? "Cliente",
             customerPhone: input.customerPhone ?? ctx.user.phone ?? null,
@@ -270,7 +273,7 @@ export const ordersRouter = createRouter({
       const [settings] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
       const pricing = settings ? { baseFee: Number(settings.deliveryBaseFee), perKm: Number(settings.deliveryPerKm), perMinute: Number(settings.deliveryPerMinute), minFee: 1.5, maxFee: 12 } : undefined;
       return {
-        ...quoteDelivery(business, input.lat, input.lng, pricing),
+        ...await quoteDeliveryWithGoogleRoutes(business, input.lat, input.lng, pricing),
         openNow: isBusinessOpenNow(business),
         opensAt: business.opensAt,
         closesAt: business.closesAt,

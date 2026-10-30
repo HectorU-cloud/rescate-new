@@ -1,0 +1,44 @@
+import { quoteDelivery, type DeliveryPricing } from "./business-rules";
+
+type RouteBusiness = { lat: number; lng: number; deliveryFee: number; feePerKm: number; deliveryRadiusKm: number; minOrder: number };
+type GoogleRoutesResponse = { routes?: Array<{ distanceMeters?: number; duration?: string }> };
+const envTrue = (value: string | undefined) => value?.trim().toLowerCase() === "true";
+
+/** Usa Google Routes cuando está habilitado; ante cualquier fallo conserva el cálculo aproximado. */
+export async function quoteDeliveryWithGoogleRoutes(business: RouteBusiness, destLat: number, destLng: number, pricing?: DeliveryPricing) {
+  const fallback = () => ({ ...quoteDelivery(business, destLat, destLng, pricing), routeProvider: "fallback" as const });
+  const apiKey = process.env.GOOGLE_ROUTES_API_KEY?.trim();
+  if (!envTrue(process.env.GOOGLE_ROUTES_ENABLED) || !apiKey) return fallback();
+  const configuredTimeout = Number(process.env.GOOGLE_ROUTES_TIMEOUT_MS ?? 4500);
+  const timeoutMs = Number.isFinite(configuredTimeout) ? Math.min(10000, Math.max(1000, configuredTimeout)) : 4500;
+  const trafficAware = process.env.GOOGLE_ROUTES_TRAFFIC_AWARE === undefined || envTrue(process.env.GOOGLE_ROUTES_TRAFFIC_AWARE);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": "routes.distanceMeters,routes.duration" },
+      body: JSON.stringify({
+        origin: { location: { latLng: { latitude: business.lat, longitude: business.lng } } },
+        destination: { location: { latLng: { latitude: destLat, longitude: destLng } } },
+        travelMode: "DRIVE", ...(trafficAware ? { routingPreference: "TRAFFIC_AWARE" } : {}), languageCode: "es", units: "METRIC",
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) return fallback();
+    const data = (await response.json()) as GoogleRoutesResponse;
+    const route = data.routes?.[0];
+    const meters = Number(route?.distanceMeters);
+    const seconds = Number.parseFloat(String(route?.duration ?? "").replace(/s$/, ""));
+    if (!Number.isFinite(meters) || meters <= 0 || !Number.isFinite(seconds) || seconds <= 0) return fallback();
+    const distanceKm = Math.round((meters / 1000) * 10) / 10;
+    const estimatedMinutes = Math.max(1, Math.ceil(seconds / 60));
+    const baseFee = pricing?.baseFee ?? business.deliveryFee;
+    const distanceFee = pricing ? pricing.perKm * distanceKm : business.feePerKm * distanceKm;
+    const timeFee = pricing ? pricing.perMinute * estimatedMinutes : 0;
+    const rawFee = baseFee + distanceFee + timeFee;
+    const fee = Math.round(Math.min(pricing?.maxFee ?? 12, Math.max(pricing?.minFee ?? 1.5, rawFee)) * 100) / 100;
+    return { distanceKm, estimatedMinutes, fee, baseFee: Math.round(baseFee * 100) / 100, distanceFee: Math.round(distanceFee * 100) / 100, timeFee: Math.round(timeFee * 100) / 100, withinRadius: distanceKm <= business.deliveryRadiusKm, radiusKm: business.deliveryRadiusKm, minOrder: business.minOrder, routeProvider: "google" as const };
+  } catch { return fallback(); }
+  finally { clearTimeout(timeout); }
+}

@@ -242,8 +242,10 @@ export const orders = mysqlTable(
     deliveryConfirmationCode: varchar("deliveryConfirmationCode", { length: 6 }), // código privado para confirmar delivery
     customerName: varchar("customerName", { length: 150 }),
     customerPhone: varchar("customerPhone", { length: 30 }),
-    // Distancia estimada comercio → cliente usada para calcular la tarifa
+    // Distancia y duración de la ruta comercio → cliente usadas para cotizar y auditar.
     deliveryDistanceKm: double("deliveryDistanceKm"),
+    deliveryDurationMinutes: int("deliveryDurationMinutes"),
+    deliveryRouteProvider: mysqlEnum("deliveryRouteProvider", ["google", "fallback"]),
     // Momento en que quedó "listo" (para el tiempo límite de espera de repartidor)
     readyAt: timestamp("readyAt"),
     courierReminderSentAt: timestamp("courierReminderSentAt"),

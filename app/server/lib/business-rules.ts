@@ -31,6 +31,7 @@ export type DeliveryQuote = {
   baseFee: number;
   distanceFee: number;
   timeFee: number;
+  routeProvider?: "google" | "fallback";
 };
 
 export type DeliveryPricing = { baseFee: number; perKm: number; perMinute: number; minFee?: number; maxFee?: number };
