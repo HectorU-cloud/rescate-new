@@ -1,6 +1,8 @@
 import { useEffect } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
+import { trpc } from "@/providers/trpc";
+import NotificationBell from "@/components/NotificationBell";
 import { useCart } from "@/hooks/useCart";
 import { money } from "@/lib/format";
 import { toast } from "sonner";
@@ -57,6 +59,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const items = useNavItems();
   const location = useLocation();
   const navigate = useNavigate();
+  const utils = trpc.useUtils();
   const showCartBar =
     !!cart && count > 0 && location.pathname !== "/carrito";
 
@@ -71,10 +74,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     const onPush = (event: Event) => {
       const payload = (event as CustomEvent<{ notification?: { title?: string; body?: string } }>).detail;
       toast.info(payload?.notification?.title ?? "Actualización de Rescate", { description: payload?.notification?.body });
+      // Llegó un aviso con la app abierta: refresca la campana y el historial al instante.
+      void utils.notifications.invalidate();
     };
     window.addEventListener("rescate:push", onPush);
     return () => window.removeEventListener("rescate:push", onPush);
-  }, []);
+  }, [utils]);
 
   return (
     <div className="min-h-dvh bg-background">
@@ -101,6 +106,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <div className="flex items-center gap-2">
+            <NotificationBell />
             <button
               onClick={() => navigate("/carrito")}
               className="relative grid h-10 w-10 place-items-center rounded-full bg-card shadow-sm ring-1 ring-border"

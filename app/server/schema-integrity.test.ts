@@ -37,6 +37,8 @@ const EXPECTED = [
   "ratings.courierId -> users (set null)",
   // Finanzas: conservar movimientos aunque se elimine el usuario/pedido de origen.
   "finance_settings.updatedBy -> users (set null)",
+  "notifications.userId -> users (cascade)",
+  "notifications.orderId -> orders (set null)",
   "wallet_entries.createdBy -> users (set null)",
   "wallet_entries.orderId -> orders (set null)",
   "wallet_entries.reviewedBy -> users (set null)",

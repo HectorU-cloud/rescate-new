@@ -120,6 +120,8 @@ export const courierRouter = createRouter({
       await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "courier_accepted" });
       const [biz] = await db.select().from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
       if (biz) await sendPushToUser(biz.ownerId, { title: "Repartidor asignado 🛵", body: `${courier.name ?? "Un repartidor"} recogerá el pedido ${order.code}.`, url: "/panel", orderId: order.id }).catch(() => undefined);
+      // El cliente también se entera: ya hay quien llevará su pedido (solo el nombre de pila).
+      await sendPushToUser(order.customerId, { title: "Ya tienes repartidor 🛵", body: `${(courier.name ?? "Un repartidor").split(" ")[0]} recogerá tu pedido ${order.code} en cuanto esté listo.`, orderId: order.id }).catch(() => undefined);
       return { ok: true };
     }),
 

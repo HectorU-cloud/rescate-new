@@ -9,6 +9,7 @@ import {
   customerAddresses,
   orderMessages,
   orders,
+  notifications,
   pushTokens,
   ratings,
   rescuePacks,
@@ -59,6 +60,7 @@ export async function deleteAccount(user: User): Promise<void> {
     await tx.delete(customerAddresses).where(eq(customerAddresses.userId, user.id));
     await tx.delete(authTokens).where(eq(authTokens.userId, user.id));
     await tx.delete(pushTokens).where(eq(pushTokens.userId, user.id));
+    await tx.delete(notifications).where(eq(notifications.userId, user.id));
     await tx.delete(courierLocations).where(eq(courierLocations.courierId, user.id));
 
     // Datos personales dentro del historial (el pedido y sus montos se conservan)

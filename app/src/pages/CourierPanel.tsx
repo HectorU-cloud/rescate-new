@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { BUSINESS_RULES } from "@contracts/constants";
 import { ChatBox } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
+import { StaticMap } from "@/components/StaticMap";
 
 const isLocked = (attempts: number) => attempts >= BUSINESS_RULES.maxCodeAttempts;
 
@@ -19,6 +20,8 @@ export default function CourierPanel() {
   const utils = trpc.useUtils();
   const [confirmationCodes, setConfirmationCodes] = useState<Record<number, string>>({});
   const [pickupCodes, setPickupCodes] = useState<Record<number, string>>({});
+  // Última posición GPS propia (se actualiza junto con el envío al servidor) para dibujar el mapa de la entrega.
+  const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
   const enabled = isAuthenticated && user?.appRole === "courier";
   const available = trpc.courier.available.useQuery(undefined, {
     enabled,
@@ -41,6 +44,7 @@ export default function CourierPanel() {
         const now = Date.now();
         if (now - lastSent < 8000) return;
         lastSent = now;
+        setMyPos({ lat: position.coords.latitude, lng: position.coords.longitude });
         for (const orderId of activeOrderIds) {
           locationUpdate.mutate({
             orderId,
@@ -242,6 +246,24 @@ export default function CourierPanel() {
                   cobra {money(order.total)} en efectivo
                 </p>
               </div>
+              {order.deliveryLat != null && order.deliveryLng != null && (
+                <div className="mt-3 overflow-hidden rounded-2xl ring-1 ring-border">
+                  {myPos ? (
+                    <StaticMap
+                      lat={myPos.lat}
+                      lng={myPos.lng}
+                      emoji="🛵"
+                      label="Tu posición y el destino de la entrega"
+                      destinationLat={order.deliveryLat}
+                      destinationLng={order.deliveryLng}
+                      className="h-44 w-full"
+                    />
+                  ) : (
+                    <p className="bg-secondary px-3 py-6 text-center text-xs font-bold text-muted-foreground">📡 Esperando tu señal GPS para mostrar el mapa…</p>
+                  )}
+                  <p className="bg-secondary/60 px-3 py-2 text-[10px] text-muted-foreground">La línea punteada es solo una referencia hacia el destino; para la ruta por calles usa «Ir con el cliente».</p>
+                </div>
+              )}
               <div className="mt-2 flex gap-2 text-xs font-extrabold">
                 {business?.lat != null && business?.lng != null && (
                   <a href={`https://www.google.com/maps/dir/?api=1&destination=${business.lat},${business.lng}`} target="_blank" rel="noreferrer" className="flex-1 rounded-xl bg-secondary py-2 text-center">

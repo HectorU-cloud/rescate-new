@@ -4,6 +4,7 @@ import { businessRouter } from "./business-router";
 import { catalogRouter } from "./catalog-router";
 import { chatRouter } from "./chat-router";
 import { courierRouter } from "./courier-router";
+import { notificationsRouter } from "./notifications-router";
 import { ordersRouter } from "./orders-router";
 import { profileRouter } from "./profile-router";
 import { pushRouter } from "./push-router";
@@ -14,6 +15,7 @@ export const appRouter = createRouter({
   auth: authRouter,
   profile: profileRouter,
   push: pushRouter,
+  notifications: notificationsRouter,
   catalog: catalogRouter,
   orders: ordersRouter,
   chat: chatRouter,

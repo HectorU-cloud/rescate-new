@@ -303,6 +303,26 @@ export const courierLocations = mysqlTable("courier_locations", {
 
 export type CourierLocation = typeof courierLocations.$inferSelect;
 
+// Centro de notificaciones dentro de la app: historial de avisos por usuario (se guarda aunque el push no esté
+// configurado o el usuario no tenga dispositivos registrados). `tag` agrupa avisos repetidos (p. ej. el chat).
+export const notifications = mysqlTable(
+  "notifications",
+  {
+    id: serial("id").primaryKey(),
+    userId: bigint("userId", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "cascade" }).notNull(),
+    orderId: bigint("orderId", { mode: "number", unsigned: true }).references(() => orders.id, { onDelete: "set null" }),
+    title: varchar("title", { length: 120 }).notNull(),
+    body: varchar("body", { length: 300 }).notNull(),
+    url: varchar("url", { length: 200 }),
+    tag: varchar("tag", { length: 80 }),
+    readAt: timestamp("readAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ userIdx: index("notif_user_idx").on(t.userId, t.createdAt) }),
+);
+
+export type Notification = typeof notifications.$inferSelect;
+
 // Dispositivos autorizados para recibir notificaciones push. Un token puede renovarse.
 export const pushTokens = mysqlTable(
   "push_tokens",

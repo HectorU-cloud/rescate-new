@@ -3,6 +3,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { getDb } from "../queries/connection";
 import { businesses, orders, pushTokens, users } from "@db/schema";
 import { chatPreview, type ChatRole } from "./chat-rules";
+import { recordNotification } from "./notifications";
 
 const FIREBASE_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 type ServiceAccount = { project_id: string; client_email: string; private_key: string; token_uri?: string };
@@ -50,6 +51,9 @@ async function getAccessToken(account: ServiceAccount) {
 }
 
 export async function sendPushToUser(userId: number, notification: { title: string; body: string; url?: string; orderId?: number; tag?: string }) {
+  // Historial dentro de la app: se guarda siempre, haya o no push configurado o dispositivos registrados.
+  // Un fallo aquí (p. ej. usuario inexistente) nunca debe impedir el envío del push.
+  await recordNotification(userId, notification).catch((error) => console.error("No se pudo guardar la notificación interna:", error));
   const account = serviceAccount();
   if (!account) return { sent: 0, skipped: true };
   const db = getDb();

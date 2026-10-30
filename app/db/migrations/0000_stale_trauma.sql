@@ -77,6 +77,33 @@ CREATE TABLE `customer_addresses` (
 	CONSTRAINT `customer_addresses_id` PRIMARY KEY(`id`)
 );
 --> statement-breakpoint
+CREATE TABLE `finance_settings` (
+	`id` serial AUTO_INCREMENT NOT NULL,
+	`serviceFee` double NOT NULL DEFAULT 0.45,
+	`courierDebtLimit` double NOT NULL DEFAULT 5,
+	`businessDebtLimit` double NOT NULL DEFAULT 15,
+	`deliveryBaseFee` double NOT NULL DEFAULT 0.8,
+	`deliveryPerKm` double NOT NULL DEFAULT 0.3,
+	`deliveryPerMinute` double NOT NULL DEFAULT 0.04,
+	`dynamicPricingEnabled` boolean NOT NULL DEFAULT false,
+	`updatedBy` bigint unsigned,
+	`updatedAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `finance_settings_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
+CREATE TABLE `notifications` (
+	`id` serial AUTO_INCREMENT NOT NULL,
+	`userId` bigint unsigned NOT NULL,
+	`orderId` bigint unsigned,
+	`title` varchar(120) NOT NULL,
+	`body` varchar(300) NOT NULL,
+	`url` varchar(200),
+	`tag` varchar(80),
+	`readAt` timestamp,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `notifications_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
 CREATE TABLE `order_events` (
 	`id` serial AUTO_INCREMENT NOT NULL,
 	`orderId` bigint unsigned NOT NULL,
@@ -121,6 +148,8 @@ CREATE TABLE `orders` (
 	`courierId` bigint unsigned,
 	`subtotal` double NOT NULL,
 	`deliveryFee` double NOT NULL DEFAULT 0,
+	`fulfillmentMethod` enum('delivery','pickup') NOT NULL DEFAULT 'delivery',
+	`serviceFee` double NOT NULL DEFAULT 0,
 	`total` double NOT NULL,
 	`paymentMethod` enum('cash') NOT NULL DEFAULT 'cash',
 	`deliveryAddress` varchar(300),
@@ -133,6 +162,8 @@ CREATE TABLE `orders` (
 	`customerName` varchar(150),
 	`customerPhone` varchar(30),
 	`deliveryDistanceKm` double,
+	`deliveryDurationMinutes` int,
+	`deliveryRouteProvider` enum('google','fallback'),
 	`readyAt` timestamp,
 	`courierReminderSentAt` timestamp,
 	`codeAttempts` int NOT NULL DEFAULT 0,
@@ -235,6 +266,24 @@ CREATE TABLE `users` (
 	CONSTRAINT `users_email_unique` UNIQUE(`email`)
 );
 --> statement-breakpoint
+CREATE TABLE `wallet_entries` (
+	`id` serial AUTO_INCREMENT NOT NULL,
+	`walletType` enum('courier','business') NOT NULL,
+	`walletId` bigint unsigned NOT NULL,
+	`entryType` enum('charge','payment','adjustment') NOT NULL,
+	`amount` double NOT NULL,
+	`status` enum('pending','confirmed','rejected') NOT NULL DEFAULT 'confirmed',
+	`orderId` bigint unsigned,
+	`description` varchar(300) NOT NULL,
+	`paymentReference` varchar(120),
+	`proofUrl` text,
+	`reviewedBy` bigint unsigned,
+	`reviewedAt` timestamp,
+	`createdBy` bigint unsigned,
+	`createdAt` timestamp NOT NULL DEFAULT (now()),
+	CONSTRAINT `wallet_entries_id` PRIMARY KEY(`id`)
+);
+--> statement-breakpoint
 ALTER TABLE `auth_tokens` ADD CONSTRAINT `auth_tokens_userId_users_id_fk` FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `businesses` ADD CONSTRAINT `businesses_ownerId_users_id_fk` FOREIGN KEY (`ownerId`) REFERENCES `users`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `claims` ADD CONSTRAINT `claims_orderId_orders_id_fk` FOREIGN KEY (`orderId`) REFERENCES `orders`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -243,6 +292,9 @@ ALTER TABLE `claims` ADD CONSTRAINT `claims_resolvedBy_users_id_fk` FOREIGN KEY 
 ALTER TABLE `courier_locations` ADD CONSTRAINT `courier_locations_orderId_orders_id_fk` FOREIGN KEY (`orderId`) REFERENCES `orders`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `courier_locations` ADD CONSTRAINT `courier_locations_courierId_users_id_fk` FOREIGN KEY (`courierId`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `customer_addresses` ADD CONSTRAINT `customer_addresses_userId_users_id_fk` FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `finance_settings` ADD CONSTRAINT `finance_settings_updatedBy_users_id_fk` FOREIGN KEY (`updatedBy`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `notifications` ADD CONSTRAINT `notifications_userId_users_id_fk` FOREIGN KEY (`userId`) REFERENCES `users`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `notifications` ADD CONSTRAINT `notifications_orderId_orders_id_fk` FOREIGN KEY (`orderId`) REFERENCES `orders`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `order_events` ADD CONSTRAINT `order_events_orderId_orders_id_fk` FOREIGN KEY (`orderId`) REFERENCES `orders`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `order_events` ADD CONSTRAINT `order_events_actorId_users_id_fk` FOREIGN KEY (`actorId`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `order_items` ADD CONSTRAINT `order_items_orderId_orders_id_fk` FOREIGN KEY (`orderId`) REFERENCES `orders`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -261,12 +313,16 @@ ALTER TABLE `ratings` ADD CONSTRAINT `ratings_customerId_users_id_fk` FOREIGN KE
 ALTER TABLE `ratings` ADD CONSTRAINT `ratings_businessId_businesses_id_fk` FOREIGN KEY (`businessId`) REFERENCES `businesses`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `ratings` ADD CONSTRAINT `ratings_courierId_users_id_fk` FOREIGN KEY (`courierId`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `rescue_packs` ADD CONSTRAINT `rescue_packs_businessId_businesses_id_fk` FOREIGN KEY (`businessId`) REFERENCES `businesses`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `wallet_entries` ADD CONSTRAINT `wallet_entries_orderId_orders_id_fk` FOREIGN KEY (`orderId`) REFERENCES `orders`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `wallet_entries` ADD CONSTRAINT `wallet_entries_reviewedBy_users_id_fk` FOREIGN KEY (`reviewedBy`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `wallet_entries` ADD CONSTRAINT `wallet_entries_createdBy_users_id_fk` FOREIGN KEY (`createdBy`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX `auth_token_user_idx` ON `auth_tokens` (`userId`);--> statement-breakpoint
 CREATE INDEX `biz_owner_idx` ON `businesses` (`ownerId`);--> statement-breakpoint
 CREATE INDEX `biz_category_idx` ON `businesses` (`category`);--> statement-breakpoint
 CREATE INDEX `claim_order_idx` ON `claims` (`orderId`);--> statement-breakpoint
 CREATE INDEX `claim_status_idx` ON `claims` (`status`);--> statement-breakpoint
 CREATE INDEX `customer_address_user_idx` ON `customer_addresses` (`userId`);--> statement-breakpoint
+CREATE INDEX `notif_user_idx` ON `notifications` (`userId`,`createdAt`);--> statement-breakpoint
 CREATE INDEX `evt_order_idx` ON `order_events` (`orderId`);--> statement-breakpoint
 CREATE INDEX `item_order_idx` ON `order_items` (`orderId`);--> statement-breakpoint
 CREATE INDEX `msg_order_idx` ON `order_messages` (`orderId`,`id`);--> statement-breakpoint
@@ -278,4 +334,7 @@ CREATE INDEX `prod_biz_idx` ON `products` (`businessId`);--> statement-breakpoin
 CREATE INDEX `push_user_idx` ON `push_tokens` (`userId`);--> statement-breakpoint
 CREATE INDEX `rating_biz_idx` ON `ratings` (`businessId`);--> statement-breakpoint
 CREATE INDEX `rating_courier_idx` ON `ratings` (`courierId`);--> statement-breakpoint
-CREATE INDEX `pack_biz_idx` ON `rescue_packs` (`businessId`);
+CREATE INDEX `pack_biz_idx` ON `rescue_packs` (`businessId`);--> statement-breakpoint
+CREATE INDEX `wallet_entry_wallet_idx` ON `wallet_entries` (`walletType`,`walletId`);--> statement-breakpoint
+CREATE INDEX `wallet_entry_status_idx` ON `wallet_entries` (`status`);--> statement-breakpoint
+CREATE INDEX `wallet_entry_order_idx` ON `wallet_entries` (`orderId`);

@@ -15,6 +15,7 @@ import Profile from "./pages/Profile";
 import AdminCouriers from "./pages/AdminCouriers";
 import AdminCourierReview from "./pages/AdminCourierReview";
 import AdminDashboard from "./pages/AdminDashboard";
+import Notifications from "./pages/Notifications";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
 
@@ -39,6 +40,7 @@ export default function App() {
               <Route path="/panel" element={<BusinessPanel />} />
               <Route path="/repartidor" element={<CourierPanel />} />
               <Route path="/perfil" element={<Profile />} />
+              <Route path="/notificaciones" element={<Notifications />} />
               <Route path="/admin" element={<AdminDashboard />} />
               <Route path="/admin/repartidores" element={<AdminCouriers />} />
               <Route path="/admin/verificacion" element={<AdminCourierReview />} />

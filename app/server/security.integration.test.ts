@@ -474,6 +474,7 @@ describe.skipIf(!enabled)("seguridad y ubicación (MySQL real)", () => {
       const customer = await mkUser("customer");
       await db.update(S.users).set({ email: `${tag}-c@test.local`, phone: "0990000000", passwordHash: "x" }).where(eq(S.users.id, customer.id));
       await db.insert(S.customerAddresses).values({ userId: customer.id, label: "Casa", address: "Calle 9", lat: -2.13, lng: -79.59 });
+      await db.insert(S.notifications).values({ userId: customer.id, title: "Pedido recibido", body: "Calle 9" });
       const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status: "delivered", customerName: "Ana", customerPhone: "0990000000", deliveryLat: -2.13, deliveryLng: -79.59, notes: "timbre roto" });
       const fresh = (await db.select().from(S.users).where(eq(S.users.id, customer.id)))[0];
       await callerFor(fresh).auth.deleteAccount({ confirmation: "ELIMINAR" });
@@ -484,6 +485,7 @@ describe.skipIf(!enabled)("seguridad y ubicación (MySQL real)", () => {
       expect(u.unionId.startsWith("deleted:")).toBe(true);
       expect(u.sessionVersion).toBe(fresh.sessionVersion + 1);
       expect(await db.select().from(S.customerAddresses).where(eq(S.customerAddresses.userId, customer.id))).toHaveLength(0);
+      expect(await db.select().from(S.notifications).where(eq(S.notifications.userId, customer.id))).toHaveLength(0);
       const o = await getOrder(orderId);
       expect([o.customerName, o.customerPhone, o.deliveryAddress, o.deliveryLat, o.notes]).toEqual(["Cuenta eliminada", null, null, null, null]);
       expect(o.total).toBe(6); // el historial contable se conserva

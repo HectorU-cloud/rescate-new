@@ -4,6 +4,7 @@ import { getDb } from "../queries/connection";
 import { businesses, orders, type OrderStatus } from "@db/schema";
 import { cancelOrderAndRestock, releaseOrderFromCourier } from "./orders";
 import { reportError } from "./monitoring";
+import { pruneNotifications } from "./notifications";
 import { logOrderEvent } from "./order-events";
 import { notifyBusinessStalled, notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser } from "./push-notifications";
 
@@ -138,4 +139,9 @@ export function startMaintenance() {
   timer = setInterval(() => { void sweepOrders(); }, 60_000);
   timer.unref?.();
   void sweepOrders();
+  // Limpieza de avisos viejos del centro de notificaciones (cada 6 horas).
+  const prune = () => pruneNotifications().catch((error) => { console.error("[maintenance] No se pudieron limpiar notificaciones:", error); reportError(error, { source: "prune-notifications" }); });
+  const pruneTimer = setInterval(prune, 6 * 3600_000);
+  pruneTimer.unref?.();
+  void prune();
 }
