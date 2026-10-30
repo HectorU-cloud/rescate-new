@@ -1,11 +1,18 @@
 import { trpc } from "@/providers/trpc";
 import { money, timeAgo } from "@/lib/format";
+import PaymentReportForm from "@/components/PaymentReportForm";
 
 const STATE_STYLE = {
   ok: "bg-card ring-border",
   warning: "bg-amber-50 ring-amber-300",
   blocked: "bg-red-50 ring-destructive",
 } as const;
+
+const DAY_FORMAT = new Intl.DateTimeFormat("es-EC", { day: "2-digit", month: "short", year: "numeric", timeZone: "America/Guayaquil" });
+/** El fin del período se guarda exclusivo (00:00 del día siguiente): se muestra el último día incluido. */
+function formatPeriod(start: Date | string, end: Date | string) {
+  return `${DAY_FORMAT.format(new Date(start))} – ${DAY_FORMAT.format(new Date(new Date(end).getTime() - 1))}`;
+}
 
 const STATUS_LABEL = { pending: "Por verificar", confirmed: "Confirmado", rejected: "Rechazado" } as const;
 
@@ -15,6 +22,7 @@ const STATUS_LABEL = { pending: "Por verificar", confirmed: "Confirmado", reject
  */
 export default function WalletCard() {
   const wallet = trpc.wallet.mine.useQuery(undefined, { refetchInterval: 60_000 });
+  const settlements = trpc.wallet.mySettlements.useQuery(undefined, { enabled: !!wallet.data });
   const w = wallet.data;
   if (!w) return null;
 
@@ -57,8 +65,15 @@ export default function WalletCard() {
         </p>
       )}
       {(w.state !== "ok" || owes) && (
-        <p className="mt-2 text-[11px] text-muted-foreground">Para pagar tu saldo, coordina la transferencia con administración; ellos confirmarán el pago y se descontará aquí.</p>
+        <p className="mt-2 whitespace-pre-line text-[11px] text-muted-foreground">
+          {w.paymentInstructions ?? "Para pagar tu saldo, coordina la transferencia con administración."}
+          {"\n"}Después de pagar, reporta tu pago aquí con la referencia y la foto del comprobante: administración lo confirmará y se descontará de tu saldo.
+        </p>
       )}
+      <PaymentReportForm
+        balance={Math.max(0, w.balance)}
+        disabledReason={w.entries.filter((e) => e.entryType === "payment" && e.status === "pending").length >= w.maxPendingPayments ? "Tienes pagos por verificar" : undefined}
+      />
 
       {w.entries.length > 0 && (
         <details className="mt-3 text-xs">
@@ -73,7 +88,11 @@ export default function WalletCard() {
                     <span className="block text-[11px] text-muted-foreground">
                       {timeAgo(entry.createdAt)}
                       {entry.status !== "confirmed" ? ` · ${STATUS_LABEL[entry.status]}` : ""}
+                      {entry.paymentReference ? ` · ref. ${entry.paymentReference}` : ""}
                     </span>
+                    {entry.status === "rejected" && entry.reviewNote && (
+                      <span className="block text-[11px] font-bold text-destructive">Motivo: {entry.reviewNote}</span>
+                    )}
                   </span>
                   <span className={`shrink-0 font-extrabold ${entry.status !== "confirmed" ? "text-muted-foreground" : isPayment ? "text-brand-dark" : ""}`}>
                     {isPayment ? "−" : "+"}
@@ -82,6 +101,24 @@ export default function WalletCard() {
                 </li>
               );
             })}
+          </ul>
+        </details>
+      )}
+
+      {(settlements.data?.length ?? 0) > 0 && (
+        <details className="mt-3 text-xs">
+          <summary className="cursor-pointer font-extrabold">Liquidaciones por período</summary>
+          <ul className="mt-2 space-y-1.5">
+            {settlements.data!.map((s) => (
+              <li key={s.id} className="rounded-xl bg-secondary/60 px-3 py-2">
+                <span className="block font-bold">{formatPeriod(s.periodStart, s.periodEnd)}</span>
+                <span className="block text-[11px] text-muted-foreground">
+                  Inicial {money(s.openingBalance)} · cargos +{money(s.charges)} · pagos −{money(s.payments)}
+                  {s.adjustments !== 0 ? ` · ajustes ${s.adjustments > 0 ? "+" : "−"}${money(Math.abs(s.adjustments))}` : ""}
+                </span>
+                <span className="block text-[11px] font-extrabold">Saldo al cierre: {money(s.closingBalance)}</span>
+              </li>
+            ))}
           </ul>
         </details>
       )}

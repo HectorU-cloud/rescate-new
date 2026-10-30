@@ -42,6 +42,7 @@ const EXPECTED = [
   "wallet_entries.createdBy -> users (set null)",
   "wallet_entries.orderId -> orders (set null)",
   "wallet_entries.reviewedBy -> users (set null)",
+  "settlements.createdBy -> users (set null)",
 ].sort();
 
 const tables = Object.values(schema).filter((v) => is(v, MySqlTable)) as unknown as MySqlTable[];
@@ -55,10 +56,10 @@ describe("integridad del esquema (claves foráneas)", () => {
   });
 
   it("toda columna que apunta a otra tabla tiene su clave foránea (así una relación nueva no queda sin proteger)", () => {
-    // wallet_entries.walletId es una referencia polimórfica: según walletType apunta a users.id
+    // wallet_entries.walletId y settlements.walletId son referencias polimórficas: según walletType apunta a users.id
     // (courier) o businesses.id (business). MySQL no permite una FK que apunte condicionalmente
     // a dos tablas; la validación del tipo y la existencia se debe hacer en la capa de servicio.
-    const polymorphicReferences = new Set(["wallet_entries.walletId"]);
+    const polymorphicReferences = new Set(["wallet_entries.walletId", "settlements.walletId"]);
     const withFk = new Set(fks.map((f) => `${f.table}.${f.column}`));
     const unprotected: string[] = [];
     for (const table of tables) {

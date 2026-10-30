@@ -447,6 +447,8 @@ export const walletEntries = mysqlTable(
     proofUrl: text("proofUrl"),
     reviewedBy: bigint("reviewedBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
     reviewedAt: timestamp("reviewedAt"),
+    // Motivo que ve la persona cuando el admin rechaza su pago
+    reviewNote: varchar("reviewNote", { length: 300 }),
     createdBy: bigint("createdBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
@@ -463,9 +465,38 @@ export const financeSettings = mysqlTable("finance_settings", {
   deliveryPerKm: double("deliveryPerKm").default(0.3).notNull(),
   deliveryPerMinute: double("deliveryPerMinute").default(0.04).notNull(),
   dynamicPricingEnabled: boolean("dynamicPricingEnabled").default(false).notNull(),
+  // Cómo pagar a Rescate (cuenta, titular…): se muestra a repartidores y comercios al reportar un pago
+  paymentInstructions: text("paymentInstructions"),
   updatedBy: bigint("updatedBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
   updatedAt: timestamp("updatedAt").defaultNow().notNull().$onUpdate(() => new Date()),
 });
 
+// Liquidación: estado de cuenta de una cuenta para un período, generado por el admin. Se guarda tal cual
+// se calculó y no se edita (sirve de constancia). El período es [periodStart, periodEnd) en UTC.
+export const settlements = mysqlTable(
+  "settlements",
+  {
+    id: serial("id").primaryKey(),
+    walletType: mysqlEnum("walletType", ["courier", "business"]).notNull(),
+    // courier: users.id; business: businesses.id (referencia polimórfica, validada en el servidor)
+    walletId: bigint("walletId", { mode: "number", unsigned: true }).notNull(),
+    periodStart: timestamp("periodStart").notNull(),
+    periodEnd: timestamp("periodEnd").notNull(),
+    openingBalance: double("openingBalance").notNull(),
+    charges: double("charges").notNull(),
+    payments: double("payments").notNull(),
+    adjustments: double("adjustments").notNull(),
+    closingBalance: double("closingBalance").notNull(),
+    pendingPayments: double("pendingPayments").notNull(),
+    createdBy: bigint("createdBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    periodUq: uniqueIndex("settlement_period_uq").on(t.walletType, t.walletId, t.periodStart, t.periodEnd),
+    walletIdx: index("settlement_wallet_idx").on(t.walletType, t.walletId),
+  }),
+);
+
 export type WalletEntry = typeof walletEntries.$inferSelect;
+export type Settlement = typeof settlements.$inferSelect;
 export type FinanceSettings = typeof financeSettings.$inferSelect;

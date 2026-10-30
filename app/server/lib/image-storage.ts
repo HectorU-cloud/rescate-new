@@ -32,14 +32,18 @@ function getClient() {
 /** Carpetas donde cada dueño puede subir y desde donde puede usar imágenes. */
 export const businessImageFolder = (businessId: number, kind: "product" | "rescue-pack") => `businesses/${businessId}/${kind}`;
 export const courierPhotoFolder = (userId: number) => `couriers/${userId}/profile`;
+/** Comprobantes de pago de una cuenta (courier: id del usuario; business: id del comercio). */
+export const paymentProofFolder = (walletType: "courier" | "business", walletId: number) => `payments/${walletType}/${walletId}/proof`;
 
 export async function createImageUploadUrl(args: {
   businessId?: number;
   contentType: SupportedImageMime;
   /** Tamaño exacto en bytes del archivo que se va a subir. Queda atado a la firma. */
   size: number;
-  kind: "product" | "rescue-pack" | "courier-profile";
+  kind: "product" | "rescue-pack" | "courier-profile" | "payment-proof";
   ownerId?: number;
+  /** Carpeta destino (obligatoria para "payment-proof"). */
+  folder?: string;
   /** Quién pide la subida (para limitar cuántas puede pedir por hora). */
   userId: number;
 }) {
@@ -61,9 +65,12 @@ export async function createImageUploadUrl(args: {
     throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Subiste muchas fotos en poco tiempo. Inténtalo de nuevo más tarde." });
   }
 
-  const folder = args.kind === "courier-profile"
-    ? courierPhotoFolder(args.ownerId ?? args.userId)
-    : businessImageFolder(args.businessId ?? 0, args.kind);
+  if (args.kind === "payment-proof" && !args.folder) throw new Error("payment-proof requiere folder");
+  const folder = args.kind === "payment-proof"
+    ? args.folder!
+    : args.kind === "courier-profile"
+      ? courierPhotoFolder(args.ownerId ?? args.userId)
+      : businessImageFolder(args.businessId ?? 0, args.kind);
   // Todas las subidas empiezan en staging/: R2 puede borrar por ciclo de vida las no confirmadas.
   const key = `staging/${folder}/${nanoid(24)}.${MIME_EXTENSIONS[args.contentType]}`;
   const uploadUrl = await presignImageUpload(s3, { bucket: env.s3Bucket, key, contentType: args.contentType, size: args.size });

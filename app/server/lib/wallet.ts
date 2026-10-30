@@ -1,8 +1,9 @@
 import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { financeSettings, walletEntries } from "@db/schema";
+import { businesses, financeSettings, walletEntries, type WalletEntry } from "@db/schema";
 import { computeBalance, computePendingPayments, debtState, type DebtState } from "@contracts/wallet";
 import { getDb } from "../queries/connection";
+import { sendPushToUser } from "./push-notifications";
 
 export type WalletType = "courier" | "business";
 
@@ -35,4 +36,38 @@ export async function assertWalletNotBlocked(walletType: WalletType, walletId: n
       walletType === "courier" ? "Paga tu saldo para volver a tomar pedidos." : "Paga tu saldo para volver a aceptar pedidos."
     }${w.pendingPayments > 0 ? ` Tienes ${money(w.pendingPayments)} en pagos por verificar.` : ""}`,
   });
+}
+
+/** Usuario que recibe los avisos de una cuenta: el repartidor mismo, o el dueño del comercio. */
+export async function walletOwnerUserId(walletType: WalletType, walletId: number): Promise<number | null> {
+  if (walletType === "courier") return walletId;
+  const [biz] = await getDb().select({ ownerId: businesses.ownerId }).from(businesses).where(eq(businesses.id, walletId)).limit(1);
+  return biz?.ownerId ?? null;
+}
+
+/** Avisa a la persona (push + campana) que su pago fue confirmado o rechazado. Nunca lanza error. */
+export async function notifyPaymentReview(entry: Pick<WalletEntry, "walletType" | "walletId" | "amount" | "paymentReference">, decision: "confirmed" | "rejected", note?: string | null) {
+  try {
+    const userId = await walletOwnerUserId(entry.walletType, entry.walletId);
+    if (!userId) return;
+    const money = (n: number) => `$${n.toFixed(2)}`;
+    const ref = entry.paymentReference ? ` (ref. ${entry.paymentReference})` : "";
+    const url = entry.walletType === "courier" ? "/repartidor" : "/panel";
+    if (decision === "confirmed") {
+      const w = await walletSummary(entry.walletType, entry.walletId);
+      await sendPushToUser(userId, {
+        title: "Pago confirmado ✅",
+        body: `Confirmamos tu pago de ${money(entry.amount)}${ref}. ${w.balance > 0 ? `Tu saldo pendiente es ${money(w.balance)}.` : "Estás al día."}`,
+        url,
+      });
+    } else {
+      await sendPushToUser(userId, {
+        title: "Pago rechazado",
+        body: `No pudimos verificar tu pago de ${money(entry.amount)}${ref}.${note ? ` Motivo: ${note}` : ""}`,
+        url,
+      });
+    }
+  } catch (error) {
+    console.error("[wallet] No se pudo avisar la revisión del pago:", error);
+  }
 }

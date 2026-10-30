@@ -6,7 +6,9 @@ import { getDb } from "./queries/connection";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { logOrderEvent } from "./lib/order-events";
 import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
-import { businesses, claims, courierLocations, orderEvents, orders, ratings, users, walletEntries, financeSettings } from "@db/schema";
+import { businesses, claims, courierLocations, orderEvents, orders, ratings, users, walletEntries, financeSettings, settlements } from "@db/schema";
+import { buildStatements, hasActivity, periodBounds, type WalletRef } from "@contracts/wallet";
+import { notifyPaymentReview } from "./lib/wallet";
 
 const daysAgo = (n: number) => {
   const d = new Date();
@@ -16,6 +18,28 @@ const daysAgo = (n: number) => {
 };
 
 const ACTIVE_STATUSES = ["pending", "accepted", "preparing", "ready", "picked_up"] as const;
+
+/** Nombres de todas las cuentas (repartidores y comercios) para mostrar en reportes. */
+async function loadWalletNames() {
+  const db = getDb();
+  const couriers = await db.select({ id: users.id, name: users.name }).from(users).where(eq(users.appRole, "courier"));
+  const biz = await db.select({ id: businesses.id, name: businesses.name }).from(businesses);
+  const names = new Map<string, string>();
+  for (const c of couriers) names.set(`courier:${c.id}`, c.name ?? `Repartidor #${c.id}`);
+  for (const b of biz) names.set(`business:${b.id}`, b.name);
+  return (ref: WalletRef) => names.get(`${ref.walletType}:${ref.walletId}`) ?? `${ref.walletType === "courier" ? "Repartidor" : "Comercio"} #${ref.walletId}`;
+}
+
+const periodInput = z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) });
+function boundsOrThrow(from: string, to: string) {
+  try { return periodBounds(from, to); } catch (e) { throw new TRPCError({ code: "BAD_REQUEST", message: e instanceof Error ? e.message : "Período inválido." }); }
+}
+async function statementsForPeriod(start: Date, end: Date) {
+  // Un movimiento creado después del fin del período no puede afectarlo (el pago cuenta al confirmarse, siempre después de crearse).
+  const entries = await getDb().select({ walletType: walletEntries.walletType, walletId: walletEntries.walletId, entryType: walletEntries.entryType, amount: walletEntries.amount, status: walletEntries.status, createdAt: walletEntries.createdAt, reviewedAt: walletEntries.reviewedAt })
+    .from(walletEntries).where(lt(walletEntries.createdAt, end));
+  return buildStatements(entries.map((e) => ({ ...e, walletId: Number(e.walletId) })), start.getTime(), end.getTime()).filter(hasActivity);
+}
 
 export const adminRouter = createRouter({
   // --------------------------------------------------------------- Finanzas
@@ -36,6 +60,7 @@ export const adminRouter = createRouter({
     deliveryPerKm: z.number().min(0).max(100),
     deliveryPerMinute: z.number().min(0).max(10),
     dynamicPricingEnabled: z.boolean(),
+    paymentInstructions: z.string().trim().max(1000).nullable().optional(),
   })).mutation(async ({ ctx, input }) => {
     const db = getDb();
     const [exists] = await db.select({ id: financeSettings.id }).from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
@@ -74,8 +99,10 @@ export const adminRouter = createRouter({
     if (input?.walletType) conditions.push(eq(walletEntries.walletType, input.walletType));
     if (input?.walletId) conditions.push(eq(walletEntries.walletId, input.walletId));
     if (input?.status) conditions.push(eq(walletEntries.status, input.status));
-    return db.select({ id: walletEntries.id, walletType: walletEntries.walletType, walletId: walletEntries.walletId, entryType: walletEntries.entryType, amount: walletEntries.amount, status: walletEntries.status, orderId: walletEntries.orderId, description: walletEntries.description, paymentReference: walletEntries.paymentReference, proofUrl: walletEntries.proofUrl, createdAt: walletEntries.createdAt, reviewedAt: walletEntries.reviewedAt })
+    const rows = await db.select({ id: walletEntries.id, walletType: walletEntries.walletType, walletId: walletEntries.walletId, entryType: walletEntries.entryType, amount: walletEntries.amount, status: walletEntries.status, orderId: walletEntries.orderId, description: walletEntries.description, paymentReference: walletEntries.paymentReference, proofUrl: walletEntries.proofUrl, reviewNote: walletEntries.reviewNote, createdAt: walletEntries.createdAt, reviewedAt: walletEntries.reviewedAt })
       .from(walletEntries).where(conditions.length ? and(...conditions) : undefined).orderBy(desc(walletEntries.createdAt)).limit(250);
+    const nameOf = await loadWalletNames();
+    return rows.map((r) => ({ ...r, walletName: nameOf({ walletType: r.walletType, walletId: Number(r.walletId) }) }));
   }),
 
   createFinanceEntry: adminQuery.input(z.object({ walletType: z.enum(["courier", "business"]), walletId: z.number().int().positive(), entryType: z.enum(["charge", "payment"]), amount: z.number().positive().max(100000), description: z.string().trim().min(3).max(300), paymentReference: z.string().trim().max(120).optional(), orderId: z.number().int().positive().optional() })).mutation(async ({ ctx, input }) => {
@@ -106,12 +133,73 @@ export const adminRouter = createRouter({
     return { ok: true };
   }),
 
-  reviewFinancePayment: adminQuery.input(z.object({ entryId: z.number().int().positive(), decision: z.enum(["confirmed", "rejected"]) })).mutation(async ({ ctx, input }) => {
+  reviewFinancePayment: adminQuery.input(z.object({ entryId: z.number().int().positive(), decision: z.enum(["confirmed", "rejected"]), note: z.string().trim().max(300).optional() })).mutation(async ({ ctx, input }) => {
     const db = getDb();
+    if (input.decision === "rejected" && (input.note ?? "").length < 3) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Indica el motivo del rechazo (mínimo 3 caracteres): la persona lo verá." });
+    }
     const [entry] = await db.select().from(walletEntries).where(eq(walletEntries.id, input.entryId)).limit(1);
     if (!entry || entry.entryType !== "payment" || entry.status !== "pending") throw new TRPCError({ code: "BAD_REQUEST", message: "El pago ya fue revisado o no existe." });
-    await db.update(walletEntries).set({ status: input.decision, reviewedBy: ctx.user.id, reviewedAt: new Date() }).where(and(eq(walletEntries.id, input.entryId), eq(walletEntries.status, "pending")));
+    const [res] = await db.update(walletEntries)
+      .set({ status: input.decision, reviewedBy: ctx.user.id, reviewedAt: new Date(), reviewNote: input.note || null })
+      .where(and(eq(walletEntries.id, input.entryId), eq(walletEntries.status, "pending")));
+    // Si otro admin lo revisó justo antes, la condición no actualiza nada: no avisamos dos veces.
+    if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pago ya fue revisado o no existe." });
+    await notifyPaymentReview(entry, input.decision, input.note);
     return { ok: true };
+  }),
+
+  /** Cargos, pagos y deuda de cada cuenta en un período (hora de Ecuador, ambas fechas incluidas). */
+  financeReport: adminQuery.input(periodInput).query(async ({ input }) => {
+    const { start, end, days } = boundsOrThrow(input.from, input.to);
+    const nameOf = await loadWalletNames();
+    const rows = (await statementsForPeriod(start, end)).map((s) => ({ ...s, name: nameOf(s) }));
+    const sum = (type: "courier" | "business", key: "charges" | "payments" | "closingBalance") =>
+      Math.round(rows.filter((r) => r.walletType === type).reduce((acc, r) => acc + r[key], 0) * 100) / 100;
+    return {
+      from: input.from, to: input.to, days,
+      rows,
+      totals: {
+        courier: { charges: sum("courier", "charges"), payments: sum("courier", "payments"), closingBalance: sum("courier", "closingBalance") },
+        business: { charges: sum("business", "charges"), payments: sum("business", "payments"), closingBalance: sum("business", "closingBalance") },
+      },
+    };
+  }),
+
+  /**
+   * Genera la liquidación (constancia del estado de cuenta) de cada cuenta con actividad en el período.
+   * Solo períodos ya terminados, y es idempotente: las cuentas que ya tienen su liquidación se omiten.
+   */
+  createSettlements: adminQuery.input(periodInput).mutation(async ({ ctx, input }) => {
+    const db = getDb();
+    const { start, end } = boundsOrThrow(input.from, input.to);
+    if (end.getTime() > Date.now()) throw new TRPCError({ code: "BAD_REQUEST", message: "El período aún no termina: liquida solo días ya cerrados." });
+    const statements = await statementsForPeriod(start, end);
+    const existing = await db.select({ walletType: settlements.walletType, walletId: settlements.walletId }).from(settlements)
+      .where(and(eq(settlements.periodStart, start), eq(settlements.periodEnd, end)));
+    const done = new Set(existing.map((e) => `${e.walletType}:${Number(e.walletId)}`));
+    const pending = statements.filter((s) => !done.has(`${s.walletType}:${s.walletId}`));
+    if (pending.length) {
+      try {
+        await db.insert(settlements).values(pending.map((s) => ({ ...s, periodStart: start, periodEnd: end, createdBy: ctx.user.id })));
+      } catch (error) {
+        const e = error as { code?: string; errno?: number; cause?: { code?: string; errno?: number } };
+        if (e.code === "ER_DUP_ENTRY" || e.errno === 1062 || e.cause?.code === "ER_DUP_ENTRY" || e.cause?.errno === 1062) {
+          throw new TRPCError({ code: "CONFLICT", message: "Otra persona acaba de generar estas liquidaciones. Actualiza la lista." });
+        }
+        throw error;
+      }
+    }
+    return { created: pending.length, skipped: statements.length - pending.length };
+  }),
+
+  settlements: adminQuery.input(z.object({ walletType: z.enum(["courier", "business"]).optional() }).optional()).query(async ({ input }) => {
+    const db = getDb();
+    const rows = await db.select().from(settlements)
+      .where(input?.walletType ? eq(settlements.walletType, input.walletType) : undefined)
+      .orderBy(desc(settlements.periodEnd), desc(settlements.id)).limit(200);
+    const nameOf = await loadWalletNames();
+    return rows.map((r) => ({ ...r, walletId: Number(r.walletId), name: nameOf({ walletType: r.walletType, walletId: Number(r.walletId) }) }));
   }),
   // ---------------------------------------------------------------- Métricas
   overview: adminQuery.query(async () => {
