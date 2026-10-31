@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_DELIVERY_FEE, DEFAULT_MIN_DELIVERY_FEE, PRICING_FORMULA_VERSION, buildPricingSnapshot, priceDelivery } from "@contracts/pricing";
+import { DEFAULT_MAX_DELIVERY_FEE, DEFAULT_MIN_DELIVERY_FEE, DYNAMIC_SIMULATION_RULES, PRICING_FORMULA_VERSION, buildPricingSnapshot, priceDelivery, simulateDynamicPricing, summarizeDynamicSimulation } from "@contracts/pricing";
 import { deliveryRates, quoteDelivery } from "./business-rules";
 
 const base = { baseFee: 0.8, perKm: 0.3, perMinute: 0.04 };
@@ -67,5 +67,65 @@ describe("buildPricingSnapshot", () => {
   it("sin topes de configuración (admin sin guardar) no registra topes", () => {
     const quote = quoteDelivery(business, -2.139, -79.588);
     expect(buildPricingSnapshot(quote, 0.45)).toMatchObject({ minFee: null, maxFee: null, clamp: null, perMinute: 0, perKm: 0.5 });
+  });
+});
+
+describe("simulateDynamicPricing", () => {
+  it("sin ninguna señal el multiplicador es 1 y no sugiere nada extra", () => {
+    expect(simulateDynamicPricing({ deliveryFee: 2.5 })).toMatchObject({ multiplier: 1, suggestedFee: 2.5, extraFee: 0, capped: null, charged: false });
+  });
+  it("tráfico: usa el tramo más alto alcanzado y registra el cociente", () => {
+    const sim = simulateDynamicPricing({ deliveryFee: 2, trafficMinutes: 20, staticMinutes: 15 }); // 1.33
+    expect(sim.signals.traffic).toEqual({ ratio: 1.33, add: 0.1 });
+    expect(sim).toMatchObject({ multiplier: 1.1, suggestedFee: 2.2, extraFee: 0.2 });
+  });
+  it("tráfico por debajo del primer tramo no suma", () => {
+    expect(simulateDynamicPricing({ deliveryFee: 2, trafficMinutes: 14, staticMinutes: 13 }).signals.traffic.add).toBe(0);
+  });
+  it("demanda: pedidos sin repartidor entre repartidores disponibles; con 0 repartidores no divide por cero", () => {
+    expect(simulateDynamicPricing({ deliveryFee: 2, openOrders: 4, availableCouriers: 2 }).signals.demand).toMatchObject({ pressure: 2, add: 0.15 });
+    expect(simulateDynamicPricing({ deliveryFee: 2, openOrders: 3, availableCouriers: 0 }).signals.demand).toMatchObject({ pressure: 3, add: 0.3 });
+  });
+  it("si falta la demanda (consulta fallida) esa señal no suma", () => {
+    expect(simulateDynamicPricing({ deliveryFee: 2, openOrders: null, availableCouriers: null }).signals.demand).toMatchObject({ pressure: null, add: 0 });
+  });
+  it("las señales se suman y el multiplicador nunca pasa del tope", () => {
+    const sim = simulateDynamicPricing({ deliveryFee: 2.5, trafficMinutes: 30, staticMinutes: 15, openOrders: 9, availableCouriers: 1, weather: "heavy_rain" });
+    expect(sim.multiplier).toBe(DYNAMIC_SIMULATION_RULES.maxMultiplier);
+    expect(sim).toMatchObject({ suggestedFee: 3.75, capped: "multiplier" });
+  });
+  it("el envío sugerido no pasa del máximo del admin y el multiplicador registrado es el efectivo", () => {
+    const sim = simulateDynamicPricing({ deliveryFee: 11, maxFee: 12, openOrders: 9, availableCouriers: 1 });
+    expect(sim).toMatchObject({ suggestedFee: 12, extraFee: 1, capped: "max_fee", multiplier: 1.09 });
+  });
+  it("si el envío ya está en el máximo no sugiere extra", () => {
+    expect(simulateDynamicPricing({ deliveryFee: 12, maxFee: 12, openOrders: 9, availableCouriers: 1 })).toMatchObject({ suggestedFee: 12, extraFee: 0, multiplier: 1 });
+  });
+  it("el snapshot solo incluye la simulación cuando se pasa, sin tocar lo cobrado", () => {
+    const quote = { ...quoteDelivery({ lat: -2.134, lng: -79.594, deliveryFee: 1, feePerKm: 0.5, deliveryRadiusKm: 8, minOrder: 0 }, -2.139, -79.588, base), routeProvider: "fallback" as const };
+    const sim = simulateDynamicPricing({ deliveryFee: quote.fee, openOrders: 4, availableCouriers: 1 });
+    const withSim = buildPricingSnapshot(quote, 0.45, sim);
+    expect(withSim.dynamicSimulation).toEqual(sim);
+    expect(withSim.deliveryFee).toBe(quote.fee);
+    expect("dynamicSimulation" in buildPricingSnapshot(quote, 0.45)).toBe(false);
+    expect("dynamicSimulation" in buildPricingSnapshot(null, 0.45, null)).toBe(false);
+  });
+});
+
+describe("summarizeDynamicSimulation", () => {
+  const calm = simulateDynamicPricing({ deliveryFee: 2 });
+  const busy = simulateDynamicPricing({ deliveryFee: 2, openOrders: 4, availableCouriers: 1 }); // 1.3 → +0.30 → x1.3
+  it("sin pedidos devuelve ceros sin dividir por cero", () => {
+    expect(summarizeDynamicSimulation([])).toMatchObject({ orders: 0, withSurge: 0, surgeShare: 0, avgMultiplier: 1, hypotheticalExtra: 0 });
+  });
+  it("cuenta recargos, ingreso hipotético y compara tiempos reales entre grupos", () => {
+    const sum = summarizeDynamicSimulation([
+      { simulation: calm, realMinutes: 20 }, { simulation: calm, realMinutes: 30 },
+      { simulation: busy, realMinutes: 40 }, { simulation: busy, realMinutes: null },
+    ]);
+    expect(sum).toMatchObject({ orders: 4, withSurge: 2, surgeShare: 0.5, avgMultiplierWhenSurge: busy.multiplier });
+    expect(sum.hypotheticalExtra).toBeCloseTo(busy.extraFee * 2, 2);
+    expect(sum.bySignal).toEqual({ traffic: 0, demand: 2, weather: 0 });
+    expect(sum.realMinutes).toEqual({ surgeAvg: 40, normalAvg: 25, surgeSamples: 1, normalSamples: 2 });
   });
 });

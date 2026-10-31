@@ -15,7 +15,7 @@ import { quoteDeliveryWithGoogleRoutes } from "./lib/google-routes";
 import { logOrderEvent } from "./lib/order-events";
 import { recomputeBusinessRating, recomputeCourierRating } from "./lib/ratings";
 import { canCustomerCancel } from "./lib/order-rules";
-import { loadPricingConfig } from "./lib/pricing";
+import { loadPricingConfig, simulateDeliveryPricing } from "./lib/pricing";
 import { buildPricingSnapshot } from "@contracts/pricing";
 import { shouldShowCourier, toPublicCourier } from "./lib/courier-public";
 import { getDb } from "./queries/connection";
@@ -127,7 +127,9 @@ export const ordersRouter = createRouter({
       // La tarifa la calcula siempre el servidor; el cliente no puede fijarla.
       const deliveryFee = quote?.fee ?? 0;
       // Tarifa de servicio al cliente: la que configura el admin (el negocio no paga comisión en esta fase).
-      const pricingSnapshot = buildPricingSnapshot(quote, serviceFee);
+      // Modo simulación del precio dinámico: se registra lo que se habría sugerido, pero NO se cobra (el total usa `deliveryFee`).
+      const simulation = quote ? await simulateDeliveryPricing(quote) : null;
+      const pricingSnapshot = buildPricingSnapshot(quote, serviceFee, simulation);
       const total = subtotal + deliveryFee + serviceFee;
 
       const orderId = await db.transaction(async (tx) => {

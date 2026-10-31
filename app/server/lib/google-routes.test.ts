@@ -43,6 +43,15 @@ describe("quoteDeliveryWithGoogleRoutes", () => {
     expect(quote).toMatchObject({ routeProvider: "google", fee: 2, rawFee: 0.63, clamp: "min", perKm: 0.3, perMinute: 0.04, minFee: 2, maxFee: 9 });
   });
 
+  it("reports the no-traffic minutes so traffic can be measured, and tolerates their absence", async () => {
+    process.env.GOOGLE_ROUTES_ENABLED = "true";
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ routes: [{ distanceMeters: 4200, duration: "1200s", staticDuration: "780s" }] }), { status: 200 })));
+    expect(await quoteDeliveryWithGoogleRoutes(business, -2.135, -79.595)).toMatchObject({ estimatedMinutes: 20, staticMinutes: 13 });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ routes: [{ distanceMeters: 4200, duration: "780s" }] }), { status: 200 })));
+    expect((await quoteDeliveryWithGoogleRoutes(business, -2.135, -79.595)).staticMinutes).toBeUndefined();
+  });
+
   it("falls back when Google responds with an error", async () => {
     process.env.GOOGLE_ROUTES_ENABLED = "true";
     process.env.GOOGLE_ROUTES_API_KEY = "test-key";

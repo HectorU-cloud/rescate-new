@@ -163,4 +163,30 @@ describe.skipIf(!enabled)("tarifas configurables y desglose del precio (MySQL re
     const customer = await mkUser("customer");
     expect((await failure(configure(customer, { serviceFee: 0.1 }))).code).toBe("FORBIDDEN");
   });
+
+  it("la simulación del precio dinámico se guarda con el pedido pero nunca cambia lo cobrado", async () => {
+    const admin = await mkUser("admin");
+    const shop = await mkShop();
+    await configure(admin, { serviceFee: 0.5, minDeliveryFee: 2, maxDeliveryFee: 12 });
+    // Genera demanda sin repartidores atendiendo, para que la simulación sugiera recargo.
+    for (let i = 0; i < 4; i++) await order(shop, "delivery");
+    const o = await order(shop, "delivery");
+    const sim = o.deliveryPricing!.dynamicSimulation!;
+    expect(sim.charged).toBe(false);
+    expect(sim.multiplier).toBeGreaterThanOrEqual(1);
+    expect(sim.deliveryFee).toBe(o.deliveryFee);
+    expect(sim.suggestedFee).toBeGreaterThanOrEqual(o.deliveryFee);
+    // Lo cobrado es exactamente subtotal + envío normal + servicio, sin recargo.
+    expect(o.total).toBeCloseTo(3 + o.deliveryFee + 0.5, 2);
+
+    const report = await callerFor(admin).admin.pricingSimulationReport({ days: 1 });
+    expect(report.orders).toBeGreaterThanOrEqual(5);
+    expect(report.hypotheticalExtra).toBeGreaterThanOrEqual(0);
+  });
+
+  it("un retiro en local no genera simulación de envío", async () => {
+    const shop = await mkShop();
+    const o = await order(shop, "pickup");
+    expect(o.deliveryPricing!.dynamicSimulation).toBeUndefined();
+  });
 });

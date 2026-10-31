@@ -8,6 +8,7 @@ import { logOrderEvent } from "./lib/order-events";
 import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
 import { businesses, claims, courierLocations, orderEvents, orders, ratings, users, walletEntries, financeSettings, settlements } from "@db/schema";
 import { buildStatements, hasActivity, periodBounds, type WalletRef } from "@contracts/wallet";
+import { summarizeDynamicSimulation, type SimulationRow } from "@contracts/pricing";
 import { notifyPaymentReview } from "./lib/wallet";
 
 const daysAgo = (n: number) => {
@@ -51,6 +52,27 @@ export const adminRouter = createRouter({
     const [created] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
     return created!;
   }),
+
+  // Simulación del precio dinámico: qué se habría sugerido cobrar en pedidos reales (no se cobró nada de esto)
+  // y si los pedidos con recargo sugerido de verdad tardaron más que el resto.
+  pricingSimulationReport: adminQuery
+    .input(z.object({ days: z.number().int().min(1).max(180).default(30) }).default({ days: 30 }))
+    .query(async ({ input }) => {
+      const rows = await getDb()
+        .select({ pricing: orders.deliveryPricing, acceptedAt: orders.courierAcceptedAt, deliveredAt: orders.deliveredAt, status: orders.status })
+        .from(orders)
+        .where(and(eq(orders.type, "delivery"), eq(orders.fulfillmentMethod, "delivery"), isNotNull(orders.deliveryPricing), gte(orders.createdAt, daysAgo(input.days))))
+        .orderBy(desc(orders.createdAt))
+        .limit(5000);
+      const simRows: SimulationRow[] = [];
+      for (const r of rows) {
+        const simulation = r.pricing?.dynamicSimulation;
+        if (!simulation || r.status === "cancelled") continue;
+        const minutes = r.acceptedAt && r.deliveredAt ? (r.deliveredAt.getTime() - r.acceptedAt.getTime()) / 60000 : null;
+        simRows.push({ simulation, realMinutes: minutes !== null && minutes > 0 ? Math.round(minutes) : null });
+      }
+      return { days: input.days, ...summarizeDynamicSimulation(simRows) };
+    }),
 
   updateFinanceSettings: adminQuery.input(z.object({
     serviceFee: z.number().min(0).max(10),

@@ -10,7 +10,7 @@
 - Los cambios de configuración valen solo para pedidos **nuevos**: los ya creados conservan lo que aceptó el cliente (importes y desglose).
 - Si el admin todavía no guardó la configuración (no existe la fila), la tarifa de servicio usa el valor de lanzamiento (USD 0,45) y el envío usa las tarifas de cada local sin topes, igual que antes.
 - La fórmula está en `contracts/pricing.ts` (`priceDelivery`) y la usan la cotización aproximada y la de Google Routes. Si cambias la fórmula, sube `PRICING_FORMULA_VERSION`.
-- Los precios dinámicos (tráfico, clima, demanda) **siguen sin aplicarse**: el interruptor solo guarda la preferencia.
+- Los precios dinámicos (tráfico, clima, demanda) **siguen sin cobrarse**: el interruptor solo guarda la preferencia. Desde ahora se **simulan** y se guardan junto al pedido sin afectar el total (ver `PRECIO_DINAMICO_SIMULACION.md`).
 
 ## Límite conocido
 El carrito muestra la tarifa vigente al abrirlo; el servidor cobra la vigente al confirmar. Si el admin la cambia justo entre ambos momentos, el total cobrado puede diferir de lo que se vio. Es una ventana de segundos; si te preocupa, el siguiente paso es enviar el total esperado al confirmar y pedir confirmación cuando no coincida.

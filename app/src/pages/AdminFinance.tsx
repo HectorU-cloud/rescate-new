@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { money } from "@/lib/format";
 import AdminPaymentReview from "@/components/AdminPaymentReview";
 import AdminFinanceReports from "@/components/AdminFinanceReports";
+import AdminPricingSimulation from "@/components/AdminPricingSimulation";
 
 const card = "rounded-2xl bg-card p-4 shadow-sm ring-1 ring-border";
 const field = "w-full rounded-xl border border-input bg-background px-3 py-2 text-sm";
@@ -86,7 +87,7 @@ export default function AdminFinance() {
           <label className="text-xs font-bold">Envío mínimo ($)<input className={`${field} mt-1`} type="number" min="0" step="0.05" value={minFee} onChange={e=>setMinFee(e.target.value)} /></label>
           <label className="text-xs font-bold">Envío máximo ($)<input className={`${field} mt-1`} type="number" min="0" step="0.05" value={maxFee} onChange={e=>setMaxFee(e.target.value)} /></label>
         </div>
-        <label className="mt-3 flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={dynamic} onChange={e=>setDynamic(e.target.checked)} /> Habilitar precios dinámicos (solo configuración; no afecta cotizaciones todavía)</label>
+        <label className="mt-3 flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={dynamic} onChange={e=>setDynamic(e.target.checked)} /> Habilitar precios dinámicos (solo configuración; la simulación corre siempre y no cobra nada)</label>
         <label className="mt-3 block text-xs font-bold">Cómo pagar a Rescate (lo ven repartidores y comercios al reportar un pago)<textarea className={`${field} mt-1`} rows={3} maxLength={1000} value={instructions} onChange={e=>setInstructions(e.target.value)} placeholder={"Banco, tipo y n.º de cuenta, titular, cédula/RUC…"} /></label>
         <button disabled={saveSettings.isPending} onClick={()=>{
           const values = [fee,courierLimit,businessLimit,baseFee,perKm,perMinute,minFee,maxFee].map(Number);
@@ -120,6 +121,8 @@ export default function AdminFinance() {
     </section>
 
     <AdminPaymentReview />
+
+    <AdminPricingSimulation />
 
     <AdminFinanceReports />
   </div>;
