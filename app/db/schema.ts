@@ -10,9 +10,11 @@ import {
   boolean,
   int,
   double,
+  json,
   index,
   uniqueIndex,
 } from "drizzle-orm/mysql-core";
+import type { DeliveryPricingSnapshot } from "../contracts/pricing";
 
 export const users = mysqlTable("users", {
   id: serial("id").primaryKey(),
@@ -246,6 +248,8 @@ export const orders = mysqlTable(
     deliveryDistanceKm: double("deliveryDistanceKm"),
     deliveryDurationMinutes: int("deliveryDurationMinutes"),
     deliveryRouteProvider: mysqlEnum("deliveryRouteProvider", ["google", "fallback"]),
+    // Cómo se calculó el precio que aceptó el cliente (tarifas, topes, versión de la fórmula). Null en pedidos anteriores.
+    deliveryPricing: json("deliveryPricing").$type<DeliveryPricingSnapshot>(),
     // Momento en que quedó "listo" (para el tiempo límite de espera de repartidor)
     readyAt: timestamp("readyAt"),
     // Tiempo de preparación que el comercio indica al aceptar un pedido (minutos) y la hora estimada resultante.
@@ -464,6 +468,9 @@ export const financeSettings = mysqlTable("finance_settings", {
   deliveryBaseFee: double("deliveryBaseFee").default(0.8).notNull(),
   deliveryPerKm: double("deliveryPerKm").default(0.3).notNull(),
   deliveryPerMinute: double("deliveryPerMinute").default(0.04).notNull(),
+  // Topes del envío a domicilio (sin importar lo que dé la fórmula)
+  minDeliveryFee: double("minDeliveryFee").default(1.5).notNull(),
+  maxDeliveryFee: double("maxDeliveryFee").default(12).notNull(),
   dynamicPricingEnabled: boolean("dynamicPricingEnabled").default(false).notNull(),
   // Cómo pagar a Rescate (cuenta, titular…): se muestra a repartidores y comercios al reportar un pago
   paymentInstructions: text("paymentInstructions"),

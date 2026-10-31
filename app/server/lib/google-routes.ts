@@ -1,4 +1,5 @@
-import { quoteDelivery, type DeliveryPricing } from "./business-rules";
+import { deliveryRates, quoteDelivery, type DeliveryPricing } from "./business-rules";
+import { priceDelivery } from "@contracts/pricing";
 
 type RouteBusiness = { lat: number; lng: number; deliveryFee: number; feePerKm: number; deliveryRadiusKm: number; minOrder: number };
 type GoogleRoutesResponse = { routes?: Array<{ distanceMeters?: number; duration?: string }> };
@@ -33,12 +34,9 @@ export async function quoteDeliveryWithGoogleRoutes(business: RouteBusiness, des
     if (!Number.isFinite(meters) || meters <= 0 || !Number.isFinite(seconds) || seconds <= 0) return fallback();
     const distanceKm = Math.round((meters / 1000) * 10) / 10;
     const estimatedMinutes = Math.max(1, Math.ceil(seconds / 60));
-    const baseFee = pricing?.baseFee ?? business.deliveryFee;
-    const distanceFee = pricing ? pricing.perKm * distanceKm : business.feePerKm * distanceKm;
-    const timeFee = pricing ? pricing.perMinute * estimatedMinutes : 0;
-    const rawFee = baseFee + distanceFee + timeFee;
-    const fee = Math.round(Math.min(pricing?.maxFee ?? 12, Math.max(pricing?.minFee ?? 1.5, rawFee)) * 100) / 100;
-    return { distanceKm, estimatedMinutes, fee, baseFee: Math.round(baseFee * 100) / 100, distanceFee: Math.round(distanceFee * 100) / 100, timeFee: Math.round(timeFee * 100) / 100, withinRadius: distanceKm <= business.deliveryRadiusKm, radiusKm: business.deliveryRadiusKm, minOrder: business.minOrder, routeProvider: "google" as const };
+    const rates = deliveryRates(business, pricing);
+    const priced = priceDelivery({ ...rates, distanceKm, minutes: estimatedMinutes });
+    return { distanceKm, estimatedMinutes, ...rates, ...priced, withinRadius: distanceKm <= business.deliveryRadiusKm, radiusKm: business.deliveryRadiusKm, minOrder: business.minOrder, routeProvider: "google" as const };
   } catch { return fallback(); }
   finally { clearTimeout(timeout); }
 }

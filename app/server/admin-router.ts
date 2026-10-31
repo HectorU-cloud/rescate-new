@@ -59,9 +59,11 @@ export const adminRouter = createRouter({
     deliveryBaseFee: z.number().min(0).max(100),
     deliveryPerKm: z.number().min(0).max(100),
     deliveryPerMinute: z.number().min(0).max(10),
+    minDeliveryFee: z.number().min(0).max(100),
+    maxDeliveryFee: z.number().min(0).max(100),
     dynamicPricingEnabled: z.boolean(),
     paymentInstructions: z.string().trim().max(1000).nullable().optional(),
-  })).mutation(async ({ ctx, input }) => {
+  }).refine((v) => v.maxDeliveryFee >= v.minDeliveryFee, { message: "El envío máximo no puede ser menor que el mínimo.", path: ["maxDeliveryFee"] })).mutation(async ({ ctx, input }) => {
     const db = getDb();
     const [exists] = await db.select({ id: financeSettings.id }).from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
     if (exists) {

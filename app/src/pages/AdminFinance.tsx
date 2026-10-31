@@ -36,6 +36,8 @@ export default function AdminFinance() {
   const [baseFee, setBaseFee] = useState("");
   const [perKm, setPerKm] = useState("");
   const [perMinute, setPerMinute] = useState("");
+  const [minFee, setMinFee] = useState("");
+  const [maxFee, setMaxFee] = useState("");
   const [dynamic, setDynamic] = useState(false);
   const [instructions, setInstructions] = useState("");
 
@@ -47,6 +49,7 @@ export default function AdminFinance() {
     setFee(String(selectedSettings.serviceFee)); setCourierLimit(String(selectedSettings.courierDebtLimit));
     setBusinessLimit(String(selectedSettings.businessDebtLimit)); setBaseFee(String(selectedSettings.deliveryBaseFee));
     setPerKm(String(selectedSettings.deliveryPerKm)); setPerMinute(String(selectedSettings.deliveryPerMinute));
+    setMinFee(String(selectedSettings.minDeliveryFee)); setMaxFee(String(selectedSettings.maxDeliveryFee));
     setDynamic(selectedSettings.dynamicPricingEnabled); setInstructions(selectedSettings.paymentInstructions ?? "");
   }, [selectedSettings?.id]);
 
@@ -71,7 +74,7 @@ export default function AdminFinance() {
 
     <section className={card}>
       <h2 className="mb-1 text-lg font-extrabold">Configuración de tarifas</h2>
-      <p className="mb-3 text-xs text-muted-foreground">Estos parámetros se guardan para la siguiente fase. El precio dinámico no modifica pedidos todavía.</p>
+      <p className="mb-3 text-xs text-muted-foreground">La tarifa de servicio y el envío (base, km, minuto, mínimo y máximo) se aplican a los pedidos NUEVOS; los pedidos ya hechos conservan lo que aceptó el cliente. El precio dinámico no modifica pedidos todavía.</p>
       {settings.isLoading ? <div className="h-24 animate-pulse rounded-xl bg-muted" /> : <>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
           <label className="text-xs font-bold">Servicio al cliente ($)<input className={`${field} mt-1`} type="number" min="0" step="0.01" value={fee} onChange={e=>setFee(e.target.value)} /></label>
@@ -80,13 +83,16 @@ export default function AdminFinance() {
           <label className="text-xs font-bold">Base de envío ($)<input className={`${field} mt-1`} type="number" min="0" step="0.05" value={baseFee} onChange={e=>setBaseFee(e.target.value)} /></label>
           <label className="text-xs font-bold">Precio por km ($)<input className={`${field} mt-1`} type="number" min="0" step="0.01" value={perKm} onChange={e=>setPerKm(e.target.value)} /></label>
           <label className="text-xs font-bold">Precio por minuto ($)<input className={`${field} mt-1`} type="number" min="0" step="0.01" value={perMinute} onChange={e=>setPerMinute(e.target.value)} /></label>
+          <label className="text-xs font-bold">Envío mínimo ($)<input className={`${field} mt-1`} type="number" min="0" step="0.05" value={minFee} onChange={e=>setMinFee(e.target.value)} /></label>
+          <label className="text-xs font-bold">Envío máximo ($)<input className={`${field} mt-1`} type="number" min="0" step="0.05" value={maxFee} onChange={e=>setMaxFee(e.target.value)} /></label>
         </div>
         <label className="mt-3 flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={dynamic} onChange={e=>setDynamic(e.target.checked)} /> Habilitar precios dinámicos (solo configuración; no afecta cotizaciones todavía)</label>
         <label className="mt-3 block text-xs font-bold">Cómo pagar a Rescate (lo ven repartidores y comercios al reportar un pago)<textarea className={`${field} mt-1`} rows={3} maxLength={1000} value={instructions} onChange={e=>setInstructions(e.target.value)} placeholder={"Banco, tipo y n.º de cuenta, titular, cédula/RUC…"} /></label>
         <button disabled={saveSettings.isPending} onClick={()=>{
-          const values = [fee,courierLimit,businessLimit,baseFee,perKm,perMinute].map(Number);
+          const values = [fee,courierLimit,businessLimit,baseFee,perKm,perMinute,minFee,maxFee].map(Number);
           if (values.some(v=>!Number.isFinite(v)||v<0)) return toast.error("Todos los valores deben ser números positivos o cero");
-          saveSettings.mutate({serviceFee:values[0],courierDebtLimit:values[1],businessDebtLimit:values[2],deliveryBaseFee:values[3],deliveryPerKm:values[4],deliveryPerMinute:values[5],dynamicPricingEnabled:dynamic,paymentInstructions:instructions.trim()||null});
+          if (values[7] < values[6]) return toast.error("El envío máximo no puede ser menor que el mínimo");
+          saveSettings.mutate({serviceFee:values[0],courierDebtLimit:values[1],businessDebtLimit:values[2],deliveryBaseFee:values[3],deliveryPerKm:values[4],deliveryPerMinute:values[5],minDeliveryFee:values[6],maxDeliveryFee:values[7],dynamicPricingEnabled:dynamic,paymentInstructions:instructions.trim()||null});
         }} className="mt-4 rounded-xl bg-brand px-4 py-2.5 text-sm font-extrabold text-white disabled:opacity-50">Guardar configuración</button>
       </>}
     </section>

@@ -35,6 +35,14 @@ describe("quoteDeliveryWithGoogleRoutes", () => {
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining("computeRoutes"), expect.objectContaining({ method: "POST" }));
   });
 
+  it("records how the fee was calculated and applies the configured minimum", async () => {
+    process.env.GOOGLE_ROUTES_ENABLED = "true";
+    process.env.GOOGLE_ROUTES_API_KEY = "test-key";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ routes: [{ distanceMeters: 300, duration: "60s" }] }), { status: 200 })));
+    const quote = await quoteDeliveryWithGoogleRoutes(business, -2.135, -79.595, { baseFee: 0.5, perKm: 0.3, perMinute: 0.04, minFee: 2, maxFee: 9 });
+    expect(quote).toMatchObject({ routeProvider: "google", fee: 2, rawFee: 0.63, clamp: "min", perKm: 0.3, perMinute: 0.04, minFee: 2, maxFee: 9 });
+  });
+
   it("falls back when Google responds with an error", async () => {
     process.env.GOOGLE_ROUTES_ENABLED = "true";
     process.env.GOOGLE_ROUTES_API_KEY = "test-key";

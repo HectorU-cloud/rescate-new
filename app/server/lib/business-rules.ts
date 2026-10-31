@@ -1,4 +1,5 @@
 import { BUSINESS_RULES } from "@contracts/constants";
+import { DEFAULT_MAX_DELIVERY_FEE, DEFAULT_MIN_DELIVERY_FEE, priceDelivery, type FeeClamp } from "@contracts/pricing";
 
 export function toRad(deg: number) {
   return (deg * Math.PI) / 180;
@@ -31,12 +32,27 @@ export type DeliveryQuote = {
   baseFee: number;
   distanceFee: number;
   timeFee: number;
+  /** Tarifas unitarias, suma sin acotar y topes aplicados: sirven para registrar cómo se calculó el envío. */
+  perKm: number;
+  perMinute: number;
+  rawFee: number;
+  minFee?: number;
+  maxFee?: number;
+  clamp: FeeClamp;
   routeProvider?: "google" | "fallback";
 };
 
 export type DeliveryPricing = { baseFee: number; perKm: number; perMinute: number; minFee?: number; maxFee?: number };
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+/**
+ * Tarifas y topes que se aplican: los de la configuración del admin, o —si aún no la guardó— los del propio local
+ * (sin topes, como antes).
+ */
+export function deliveryRates(business: Pick<DeliveryBusiness, "deliveryFee" | "feePerKm">, pricing?: DeliveryPricing) {
+  return pricing
+    ? { baseFee: pricing.baseFee, perKm: pricing.perKm, perMinute: pricing.perMinute, minFee: pricing.minFee ?? DEFAULT_MIN_DELIVERY_FEE, maxFee: pricing.maxFee ?? DEFAULT_MAX_DELIVERY_FEE }
+    : { baseFee: business.deliveryFee, perKm: business.feePerKm, perMinute: 0 };
+}
 
 /** Distancia estimada por calles y tarifa = base + costo por km. */
 export function quoteDelivery(business: DeliveryBusiness, destLat: number, destLng: number, pricing?: DeliveryPricing): DeliveryQuote {
@@ -45,12 +61,9 @@ export function quoteDelivery(business: DeliveryBusiness, destLat: number, destL
   // ETA orientativa: velocidad urbana conservadora de 20 km/h + 5 min de preparación/salida.
   // Se sustituirá por Routes API cuando se conecte un proveedor de rutas real.
   const estimatedMinutes = Math.max(5, Math.ceil((distanceKm / 20) * 60 + 5));
-  const baseFee = pricing?.baseFee ?? business.deliveryFee;
-  const distanceFee = pricing ? pricing.perKm * distanceKm : business.feePerKm * distanceKm;
-  const timeFee = pricing ? pricing.perMinute * estimatedMinutes : 0;
-  const rawFee = baseFee + distanceFee + timeFee;
-  const fee = round2(pricing ? Math.min(pricing.maxFee ?? 12, Math.max(pricing.minFee ?? 1.5, rawFee)) : rawFee);
-  return { distanceKm, fee, estimatedMinutes, baseFee: round2(baseFee), distanceFee: round2(distanceFee), timeFee: round2(timeFee), withinRadius: distanceKm <= business.deliveryRadiusKm, radiusKm: business.deliveryRadiusKm, minOrder: business.minOrder };
+  const rates = deliveryRates(business, pricing);
+  const priced = priceDelivery({ ...rates, distanceKm, minutes: estimatedMinutes });
+  return { distanceKm, estimatedMinutes, ...rates, ...priced, withinRadius: distanceKm <= business.deliveryRadiusKm, radiusKm: business.deliveryRadiusKm, minOrder: business.minOrder };
 }
 
 function toMinutes(hhmm: string) {

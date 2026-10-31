@@ -3,7 +3,7 @@ import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
 import { randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import { createRouter, authedQuery } from "./middleware";
+import { createRouter, authedQuery, publicQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { assertCustomerCanOrder } from "./lib/order-limits";
 import { loadBusinessesByIds } from "./lib/business-queries";
@@ -15,11 +15,12 @@ import { quoteDeliveryWithGoogleRoutes } from "./lib/google-routes";
 import { logOrderEvent } from "./lib/order-events";
 import { recomputeBusinessRating, recomputeCourierRating } from "./lib/ratings";
 import { canCustomerCancel } from "./lib/order-rules";
+import { loadPricingConfig } from "./lib/pricing";
+import { buildPricingSnapshot } from "@contracts/pricing";
 import { shouldShowCourier, toPublicCourier } from "./lib/courier-public";
 import { getDb } from "./queries/connection";
 import {
   businesses,
-  financeSettings,
   claims,
   courierLocations,
   orderItems,
@@ -98,8 +99,7 @@ export const ordersRouter = createRouter({
       if (!isPickup && (!input.deliveryAddress || input.deliveryAddress.trim().length < 5 || input.deliveryLat == null || input.deliveryLng == null)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Para entrega a domicilio debes indicar dirección y ubicación GPS." });
       }
-      const [pricingSettings] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
-      const pricing = pricingSettings ? { baseFee: Number(pricingSettings.deliveryBaseFee), perKm: Number(pricingSettings.deliveryPerKm), perMinute: Number(pricingSettings.deliveryPerMinute), minFee: 1.5, maxFee: 12 } : undefined;
+      const { serviceFee, pricing } = await loadPricingConfig();
       const quote = !isPickup ? await quoteDeliveryWithGoogleRoutes(business, input.deliveryLat!, input.deliveryLng!, pricing) : null;
       if (quote && !quote.withinRadius) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Tu ubicación está a ${quote.distanceKm} km y este local entrega hasta ${quote.radiusKm} km.` });
@@ -126,7 +126,8 @@ export const ordersRouter = createRouter({
       }
       // La tarifa la calcula siempre el servidor; el cliente no puede fijarla.
       const deliveryFee = quote?.fee ?? 0;
-      const serviceFee = 0.45; // Tarifa de lanzamiento al cliente; el negocio no paga comisión en esta fase.
+      // Tarifa de servicio al cliente: la que configura el admin (el negocio no paga comisión en esta fase).
+      const pricingSnapshot = buildPricingSnapshot(quote, serviceFee);
       const total = subtotal + deliveryFee + serviceFee;
 
       const orderId = await db.transaction(async (tx) => {
@@ -150,6 +151,7 @@ export const ordersRouter = createRouter({
             deliveryDistanceKm: quote?.distanceKm ?? null,
             deliveryDurationMinutes: quote?.estimatedMinutes ?? null,
             deliveryRouteProvider: quote?.routeProvider ?? null,
+            deliveryPricing: pricingSnapshot,
             notes: input.notes ?? null,
             customerName: ctx.user.name ?? "Cliente",
             customerPhone: input.customerPhone ?? ctx.user.phone ?? null,
@@ -259,6 +261,9 @@ export const ordersRouter = createRouter({
       return created;
     }),
 
+  // Tarifa de servicio vigente (la que se cobrará al confirmar). Es pública para que el carrito la muestre siempre.
+  fees: publicQuery.query(async () => ({ serviceFee: (await loadPricingConfig()).serviceFee })),
+
   // Cotización de envío para mostrar en el carrito antes de confirmar.
   quote: authedQuery
     .input(z.object({
@@ -270,10 +275,10 @@ export const ordersRouter = createRouter({
       const db = getDb();
       const business = await db.query.businesses.findFirst({ where: eq(businesses.id, input.businessId) });
       if (!business || !isBusinessPublic(business)) throw new TRPCError({ code: "NOT_FOUND", message: "El local no está disponible" });
-      const [settings] = await db.select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
-      const pricing = settings ? { baseFee: Number(settings.deliveryBaseFee), perKm: Number(settings.deliveryPerKm), perMinute: Number(settings.deliveryPerMinute), minFee: 1.5, maxFee: 12 } : undefined;
+      const { serviceFee, pricing } = await loadPricingConfig();
       return {
         ...await quoteDeliveryWithGoogleRoutes(business, input.lat, input.lng, pricing),
+        serviceFee,
         openNow: isBusinessOpenNow(business),
         opensAt: business.opensAt,
         closesAt: business.closesAt,

@@ -34,6 +34,9 @@ export default function Cart() {
     { enabled: isAuthenticated && !!cart && fulfillmentMethod === "delivery" && !!deliveryCoords, retry: false },
   );
 
+  // Tarifa de servicio vigente: la fija el admin y el servidor cobra esta misma al confirmar.
+  const fees = trpc.orders.fees.useQuery(undefined, { enabled: !!cart, retry: 1 });
+
   const createOrder = trpc.orders.createDelivery.useMutation({
     onSuccess: (data) => {
       clear();
@@ -65,10 +68,12 @@ export default function Cart() {
 
   const q = quote.data;
   const deliveryFee = fulfillmentMethod === "pickup" ? 0 : (q?.fee ?? cart.deliveryFee);
-  const serviceFee = 0.45; // Tarifa de servicio de lanzamiento, visible al cliente.
-  const total = subtotal + deliveryFee + serviceFee;
+  const serviceFee = fees.data?.serviceFee ?? null;
+  const total = subtotal + deliveryFee + (serviceFee ?? 0);
   const belowMin = !!q && subtotal < q.minOrder;
-  const blockReason = fulfillmentMethod === "pickup" ? null : !deliveryCoords
+  const blockReason = serviceFee === null
+    ? (fees.error ? "No pudimos cargar las tarifas. Recarga la página." : "Calculando tarifas…")
+    : fulfillmentMethod === "pickup" ? null : !deliveryCoords
     ? "Comparte tu ubicación para calcular el envío"
     : quote.isLoading
       ? "Calculando envío…"
@@ -259,7 +264,7 @@ export default function Cart() {
             <p className="mt-1">Tiempo referencial; puede variar según tráfico y condiciones de la vía.</p>
           </div>
         )}
-        <div className="flex justify-between text-sm font-semibold text-muted-foreground"><span>Tarifa de servicio de Rescate</span><span>{money(serviceFee)}</span></div>
+        <div className="flex justify-between text-sm font-semibold text-muted-foreground"><span>Tarifa de servicio de Rescate</span><span>{serviceFee === null ? "—" : money(serviceFee)}</span></div>
         {fulfillmentMethod === "delivery" && q && q.minOrder > 0 && (
           <p className={`text-xs font-bold ${belowMin ? "text-destructive" : "text-muted-foreground"}`}>
             Pedido mínimo: {money(q.minOrder)}
@@ -270,7 +275,7 @@ export default function Cart() {
             <p className="text-xs font-extrabold uppercase tracking-wide">Total a pagar</p>
             <p className="mt-1 text-[11px] font-semibold opacity-80">Efectivo {fulfillmentMethod === "pickup" ? "en el local" : "al recibir"}</p>
           </div>
-          <span className="font-display text-2xl font-extrabold">{money(total)}</span>
+          <span className="font-display text-2xl font-extrabold">{serviceFee === null ? "—" : money(total)}</span>
         </div>
         <p className="flex items-start gap-2 rounded-xl bg-secondary px-3 py-3 text-xs font-semibold text-muted-foreground">
           <span aria-hidden="true">💵</span><span>{fulfillmentMethod === "pickup" ? "Pagas en efectivo al retirar tu pedido en el local. No se asignará repartidor." : "Pagas en efectivo al recibir. Revisa tu dirección y teléfono para que el repartidor pueda coordinar la entrega. El pago en línea estará disponible próximamente."}</span>
@@ -301,7 +306,7 @@ export default function Cart() {
         {createOrder.isPending
           ? "Enviando…"
           : isAuthenticated
-            ? `Confirmar pedido · ${money(total)}`
+            ? `Confirmar pedido · ${serviceFee === null ? "—" : money(total)}`
             : "Entra para confirmar tu pedido"}
       </button>
       {isAuthenticated && blockReason && (
