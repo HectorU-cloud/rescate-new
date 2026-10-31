@@ -2,6 +2,7 @@ import { and, count, eq, gte, inArray, isNull } from "drizzle-orm";
 import { financeSettings, orders, users } from "@db/schema";
 import { DEFAULT_SERVICE_FEE, simulateDynamicPricing } from "@contracts/pricing";
 import { getDb } from "../queries/connection";
+import { getWeatherCondition } from "./weather";
 import type { DeliveryPricing } from "./business-rules";
 
 /**
@@ -49,9 +50,9 @@ export async function loadDemandSignal(): Promise<{ openOrders: number; availabl
 }
 
 /** Arma la simulación de un envío. Nunca lanza: una simulación fallida no debe impedir un pedido. */
-export async function simulateDeliveryPricing(quote: { fee: number; maxFee?: number; estimatedMinutes: number; routeProvider?: "google" | "fallback"; staticMinutes?: number }) {
+export async function simulateDeliveryPricing(business: { lat: number; lng: number }, quote: { fee: number; maxFee?: number; estimatedMinutes: number; routeProvider?: "google" | "fallback"; staticMinutes?: number }) {
   try {
-    const demand = await loadDemandSignal();
+    const [demand, weather] = await Promise.all([loadDemandSignal(), getWeatherCondition(business.lat, business.lng)]);
     return simulateDynamicPricing({
       deliveryFee: quote.fee,
       maxFee: quote.maxFee ?? null,
@@ -60,7 +61,7 @@ export async function simulateDeliveryPricing(quote: { fee: number; maxFee?: num
       staticMinutes: quote.routeProvider === "google" ? quote.staticMinutes ?? null : null,
       openOrders: demand?.openOrders ?? null,
       availableCouriers: demand?.availableCouriers ?? null,
-      weather: null, // pendiente: proveedor de clima con caché por zona
+      weather,
     });
   } catch (error) {
     console.error("No se pudo calcular la simulación de precio dinámico:", error);

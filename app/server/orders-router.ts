@@ -128,7 +128,7 @@ export const ordersRouter = createRouter({
       const deliveryFee = quote?.fee ?? 0;
       // Tarifa de servicio al cliente: la que configura el admin (el negocio no paga comisión en esta fase).
       // Modo simulación del precio dinámico: se registra lo que se habría sugerido, pero NO se cobra (el total usa `deliveryFee`).
-      const simulation = quote ? await simulateDeliveryPricing(quote) : null;
+      const simulation = quote ? await simulateDeliveryPricing(business, quote) : null;
       const pricingSnapshot = buildPricingSnapshot(quote, serviceFee, simulation);
       const total = subtotal + deliveryFee + serviceFee;
 

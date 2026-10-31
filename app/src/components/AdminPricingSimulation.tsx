@@ -33,7 +33,7 @@ export default function AdminPricingSimulation() {
         <div className="rounded-xl bg-secondary p-3"><p className="text-[11px] font-bold text-muted-foreground">Multiplicador medio (con recargo)</p><p className="text-xl font-extrabold">×{r.avgMultiplierWhenSurge.toFixed(2)}</p></div>
         <div className="rounded-xl bg-secondary p-3"><p className="text-[11px] font-bold text-muted-foreground">Ingreso extra hipotético</p><p className="text-xl font-extrabold">{money(r.hypotheticalExtra)}</p></div>
       </div>
-      <p className="mt-3 text-xs text-muted-foreground">Señales activas: tráfico en {r.bySignal.traffic} pedidos, demanda en {r.bySignal.demand}, clima en {r.bySignal.weather} (el clima aún no está conectado). Topes alcanzados: {r.cappedCount}.</p>
+      <p className="mt-3 text-xs text-muted-foreground">Señales activas: tráfico en {r.bySignal.traffic} pedidos, demanda en {r.bySignal.demand}, clima en {r.bySignal.weather}. Topes alcanzados: {r.cappedCount}.</p>
       <div className="mt-3 rounded-xl border border-border p-3 text-sm">
         <p className="font-extrabold">¿Los pedidos con recargo tardan más?</p>
         <p className="mt-1 text-xs text-muted-foreground">Tiempo real desde que el repartidor aceptó hasta la entrega.</p>
