@@ -7,12 +7,18 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencias
 node_modules
+
+# Builds de Vite / Frontend
 dist
 dist-ssr
-*.local
+build/
+coverage/
+.nyc_output/
 
-# Editor directories and files
+# Archivos locales y del editor
+*.local
 .vscode/*
 !.vscode/extensions.json
 .idea
@@ -22,19 +28,36 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-# Environment variables
+
+# Variables de entorno
 .env
 .env.local
 .env.*.local
-# Database
+
+# Base de datos
 *.db
 *.sqlite
 *.sqlite3
-# TypeScript cache
+
+# Caché de TypeScript
 *.tsbuildinfo
-# Build outputs
-dist/
-build/
-# Test coverage
-coverage/
-.nyc_output/
+
+# Android / Bubblewrap (TWA)
+android/
+app/
+.gradle/
+gradle/
+*.gradle
+gradlew
+gradlew.bat
+local.properties
+*.keystore
+*.jks
+*.apk
+*.aab
+twa-manifest.json
+hs_err_pid*.log
+replay_pid*.log
+*.idsig
+manifest-checksum.txt
+store_icon.png
