@@ -18,6 +18,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 import Notifications from "./pages/Notifications";
 import Privacy from "./pages/Privacy";
 import Terms from "./pages/Terms";
+import DeleteAccount from "./pages/DeleteAccount";
 
 export default function App() {
   return (
@@ -25,6 +26,7 @@ export default function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/privacidad" element={<Privacy />} />
       <Route path="/terminos" element={<Terms />} />
+      <Route path="/eliminar-cuenta" element={<DeleteAccount />} />
       <Route
         path="*"
         element={

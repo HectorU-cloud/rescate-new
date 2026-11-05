@@ -68,7 +68,7 @@ export default function Privacy() {
       <p>Tienes derecho a acceso, rectificación y actualización, eliminación, oposición, limitación del tratamiento y portabilidad de tus datos, y a no ser objeto de decisiones basadas únicamente en tratamientos automatizados.</p>
       <ul>
         <li><b>Rectificar:</b> edita tu nombre, teléfono y direcciones desde <Link className="underline" to="/perfil">Perfil</Link>.</li>
-        <li><b>Eliminar:</b> en <Link className="underline" to="/perfil">Perfil</Link> → «Eliminar mi cuenta». Borra tu nombre, correo, teléfono, contraseña, foto, direcciones guardadas, dispositivos de notificación y los textos que escribiste (chat, reclamos, comentarios), y anonimiza tus pedidos. No es posible con pedidos en curso. Si eres dueño de un comercio, este dejará de publicarse.</li>
+        <li><b>Eliminar:</b> en <Link className="underline" to="/perfil">Perfil</Link> → «Eliminar mi cuenta». Borra tu nombre, correo, teléfono, contraseña, foto, direcciones guardadas, dispositivos de notificación y los textos que escribiste (chat, reclamos, comentarios), y anonimiza tus pedidos. No es posible con pedidos en curso. Si eres dueño de un comercio, este dejará de publicarse. Los pasos también están en <Link className="underline" to="/eliminar-cuenta">Cómo eliminar tu cuenta</Link>, una página pública que no requiere iniciar sesión.</li>
         <li><b>Acceso, oposición, limitación o portabilidad:</b> escríbenos a <ContactLine /> y responderemos dentro de los plazos legales.</li>
       </ul>
       <p>Si consideras que tus derechos no fueron atendidos, puedes acudir a la Superintendencia de Protección de Datos Personales del Ecuador.</p>
