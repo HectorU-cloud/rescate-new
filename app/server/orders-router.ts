@@ -19,6 +19,7 @@ import { loadPricingConfig, simulateDeliveryPricing } from "./lib/pricing";
 import { buildPricingSnapshot } from "@contracts/pricing";
 import { shouldShowCourier, toPublicCourier } from "./lib/courier-public";
 import { getDb } from "./queries/connection";
+import { MOBILE_HINT, normalizeEcuadorMobile } from "@contracts/phone";
 import {
   businesses,
   claims,
@@ -30,6 +31,13 @@ import {
   rescuePacks,
   users,
 } from "@db/schema";
+
+/** Celular del cliente: si lo escribe debe ser válido (se guarda normalizado); si no, se usa el de su perfil. */
+const customerPhoneInput = z.string().trim().max(30)
+  .refine((v) => v === "" || normalizeEcuadorMobile(v) !== null, MOBILE_HINT)
+  .optional();
+const resolveCustomerPhone = (typed: string | undefined, profilePhone: string | null | undefined) =>
+  (typed ? normalizeEcuadorMobile(typed) : null) ?? profilePhone ?? null;
 
 // 6 caracteres sin ambiguos (0/O, 1/I): ~887 millones de combinaciones
 const codeSuffix = customAlphabet("23456789ABCDEFGHJKLMNPQRSTUVWXYZ", 6);
@@ -81,7 +89,7 @@ export const ordersRouter = createRouter({
         deliveryLat: z.number().min(-90).max(90).optional(),
         deliveryLng: z.number().min(-180).max(180).optional(),
         notes: z.string().max(300).optional(),
-        customerPhone: z.string().max(30).optional(),
+        customerPhone: customerPhoneInput,
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -156,7 +164,7 @@ export const ordersRouter = createRouter({
             deliveryPricing: pricingSnapshot,
             notes: input.notes ?? null,
             customerName: ctx.user.name ?? "Cliente",
-            customerPhone: input.customerPhone ?? ctx.user.phone ?? null,
+            customerPhone: resolveCustomerPhone(input.customerPhone, ctx.user.phone),
           })
           .$returningId();
         await tx.insert(orderItems).values(
@@ -179,7 +187,7 @@ export const ordersRouter = createRouter({
       z.object({
         rescuePackId: z.number().int().positive(),
         quantity: z.number().int().min(1).max(5),
-        customerPhone: z.string().max(30).optional(),
+        customerPhone: customerPhoneInput,
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -238,7 +246,7 @@ export const ordersRouter = createRouter({
             total,
             pickupCode: makePickupCode(),
             customerName: ctx.user.name ?? "Cliente",
-            customerPhone: input.customerPhone ?? ctx.user.phone ?? null,
+            customerPhone: resolveCustomerPhone(input.customerPhone, ctx.user.phone),
           })
           .$returningId();
         await tx.insert(orderItems).values({

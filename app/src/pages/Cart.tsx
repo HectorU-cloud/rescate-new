@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { money } from "@/lib/format";
+import { MOBILE_HINT, normalizeEcuadorMobile } from "@contracts/phone";
 import { toast } from "sonner";
 
 export default function Cart() {
@@ -17,6 +18,12 @@ export default function Cart() {
   const [deliveryCoords, setDeliveryCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locating, setLocating] = useState(false);
   const [addressLabel, setAddressLabel] = useState("Casa");
+  // Los errores de los campos se muestran al intentar confirmar o al salir del campo.
+  const [submitted, setSubmitted] = useState(false);
+  const [touched, setTouched] = useState<{ address?: boolean; phone?: boolean }>({});
+  const addressRef = useRef<HTMLInputElement>(null);
+  const locationRef = useRef<HTMLButtonElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
   const savedAddresses = trpc.profile.myAddresses.useQuery(undefined, { enabled: isAuthenticated });
   const saveAddress = trpc.profile.saveAddress.useMutation({
@@ -71,10 +78,20 @@ export default function Cart() {
   const serviceFee = fees.data?.serviceFee ?? null;
   const total = subtotal + deliveryFee + (serviceFee ?? 0);
   const belowMin = !!q && subtotal < q.minOrder;
+  // Campos que el cliente debe completar: se explican junto al campo y no bloquean el botón en silencio.
+  const isDelivery = fulfillmentMethod === "delivery";
+  const fieldErrors = {
+    address: isDelivery && address.trim().length < 5 ? "Escribe tu dirección (calle, número y referencia), mínimo 5 caracteres." : null,
+    location: isDelivery && !deliveryCoords ? "Toca «Usar mi ubicación» para calcular el envío." : null,
+    phone: !phone.trim() ? "Escribe tu celular para que podamos coordinar la entrega." : normalizeEcuadorMobile(phone) === null ? MOBILE_HINT : null,
+  };
+  const hasFieldErrors = Object.values(fieldErrors).some(Boolean);
+  const showError = (key: "address" | "location" | "phone") => ((submitted || (key !== "location" && touched[key])) ? fieldErrors[key] : null);
+
+  // Lo que impide confirmar y no depende de lo que escriba el cliente (tarifas, ruta, horario, mínimo).
   const blockReason = serviceFee === null
     ? (fees.error ? "No pudimos cargar las tarifas. Recarga la página." : "Calculando tarifas…")
-    : fulfillmentMethod === "pickup" ? null : !deliveryCoords
-    ? "Comparte tu ubicación para calcular el envío"
+    : !isDelivery || !deliveryCoords ? null
     : quote.isLoading
       ? "Calculando envío…"
       : quote.error
@@ -85,9 +102,30 @@ export default function Cart() {
             ? `El local está cerrado (atiende de ${q.opensAt} a ${q.closesAt})`
             : belowMin
               ? `El pedido mínimo es ${money(q!.minOrder)}`
-              : fulfillmentMethod === "delivery" && address.trim().length < 5
-                ? "Escribe tu dirección para continuar"
-                : null;
+              : null;
+
+  const field = "w-full rounded-xl border bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring";
+  const fieldClass = (invalid: boolean) => `${field} ${invalid ? "border-destructive" : "border-input"}`;
+  const errorText = (id: string, message: string | null) => message ? <p id={id} role="alert" className="mt-1 text-xs font-bold text-destructive">{message}</p> : null;
+
+  function confirm() {
+    setSubmitted(true);
+    if (hasFieldErrors) {
+      toast.error("Revisa los campos marcados en rojo.");
+      const first = fieldErrors.address ? addressRef.current : fieldErrors.location ? locationRef.current : phoneRef.current;
+      first?.scrollIntoView({ behavior: "smooth", block: "center" });
+      first?.focus({ preventScroll: true });
+      return;
+    }
+    createOrder.mutate({
+      businessId: cart!.businessId,
+      items: cart!.items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+      fulfillmentMethod,
+      ...(isDelivery ? { deliveryAddress: address.trim(), deliveryLat: deliveryCoords!.lat, deliveryLng: deliveryCoords!.lng } : {}),
+      notes: notes.trim() || undefined,
+      customerPhone: normalizeEcuadorMobile(phone) ?? undefined,
+    });
+  }
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
@@ -172,12 +210,22 @@ export default function Cart() {
           <button type="button" onClick={() => { setFulfillmentMethod("pickup"); setDeliveryCoords(null); }} className={`rounded-xl px-3 py-3 text-sm font-extrabold ${fulfillmentMethod === "pickup" ? "bg-card text-brand shadow-sm" : "text-muted-foreground"}`}>🏪 Retirar en local</button>
         </div>
         {fulfillmentMethod === "delivery" ? <>
-        <input
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="Dirección en Milagro (calle, número, referencia)"
-          className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
-        />
+        <div>
+          <label htmlFor="cart-address" className="mb-1 block text-xs font-extrabold text-muted-foreground">Dirección de entrega <span className="text-destructive">*</span></label>
+          <input
+            id="cart-address"
+            ref={addressRef}
+            value={address}
+            onChange={(e) => setAddress(e.target.value)}
+            onBlur={() => setTouched((t) => ({ ...t, address: true }))}
+            placeholder="Dirección en Milagro (calle, número, referencia)"
+            maxLength={300}
+            aria-invalid={showError("address") ? true : undefined}
+            aria-describedby={showError("address") ? "cart-address-error" : undefined}
+            className={fieldClass(!!showError("address"))}
+          />
+          {errorText("cart-address-error", showError("address"))}
+        </div>
         {isAuthenticated && (savedAddresses.data?.length ?? 0) > 0 && (
           <div className="space-y-2 rounded-2xl bg-secondary/60 p-3">
             <p className="text-xs font-extrabold">Mis direcciones guardadas</p>
@@ -193,7 +241,9 @@ export default function Cart() {
           </div>
         )}
         <button
+          ref={locationRef}
           type="button"
+          aria-invalid={showError("location") ? true : undefined}
           disabled={locating || !navigator.geolocation}
           onClick={() => {
             if (!navigator.geolocation) {
@@ -214,10 +264,11 @@ export default function Cart() {
               { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
             );
           }}
-          className="w-full rounded-xl border border-brand/30 bg-brand-soft px-4 py-3 text-sm font-extrabold text-brand-dark disabled:opacity-50"
+          className={`w-full rounded-xl border bg-brand-soft px-4 py-3 text-sm font-extrabold text-brand-dark disabled:opacity-50 ${showError("location") ? "border-destructive" : "border-brand/30"}`}
         >
           {locating ? "Obteniendo ubicación…" : deliveryCoords ? "✓ Ubicación de entrega guardada" : "📍 Usar mi ubicación (necesaria para calcular el envío)"}
         </button>
+        {errorText("cart-location-error", showError("location"))}
         <p className="text-[11px] text-muted-foreground">
           La ubicación se usa para calcular la distancia, el costo de envío y la llegada estimada. Verifica que coincida con la dirección escrita.
         </p>
@@ -230,22 +281,47 @@ export default function Cart() {
           </div>
         )}
         </> : <div className="rounded-2xl bg-brand-soft p-4 text-sm font-semibold text-brand-dark">🏪 Recogerás tu pedido directamente en <strong>{cart.businessName}</strong>. No se asignará repartidor ni se cobrará envío. Revisa el horario del local antes de confirmar.</div>}
-        <input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="Tu celular (para coordinar la entrega)"
-          className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
-        />
-        <input
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          placeholder="Nota para el local (opcional): sin cebolla, extra ají…"
-          className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
-        />
+        <div>
+          <label htmlFor="cart-phone" className="mb-1 block text-xs font-extrabold text-muted-foreground">Tu celular <span className="text-destructive">*</span></label>
+          <input
+            id="cart-phone"
+            ref={phoneRef}
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            onBlur={() => setTouched((t) => ({ ...t, phone: true }))}
+            placeholder="Ej. 0991234567 (para coordinar la entrega)"
+            maxLength={20}
+            aria-invalid={showError("phone") ? true : undefined}
+            aria-describedby={showError("phone") ? "cart-phone-error" : undefined}
+            className={fieldClass(!!showError("phone"))}
+          />
+          {errorText("cart-phone-error", showError("phone"))}
+        </div>
+        <div>
+          <label htmlFor="cart-notes" className="mb-1 block text-xs font-extrabold text-muted-foreground">Nota para el local (opcional)</label>
+          <input
+            id="cart-notes"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Sin cebolla, extra ají…"
+            maxLength={300}
+            className={fieldClass(false)}
+          />
+        </div>
       </section>
 
       {/* Resumen */}
       <section className="space-y-3 rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
+        {isDelivery && (
+          <div className="flex items-center justify-between rounded-xl bg-secondary/50 px-3 py-2 text-sm font-semibold">
+            <span className="text-muted-foreground">🕒 Tiempo estimado de viaje</span>
+            <span className="font-extrabold">{q ? `≈ ${q.estimatedMinutes} min` : "—"}</span>
+          </div>
+        )}
+        {isDelivery && !q && <p className="-mt-1 text-[11px] text-muted-foreground">Comparte tu ubicación para ver el tiempo y el costo del envío.</p>}
         <div className="flex justify-between text-sm font-semibold text-muted-foreground">
           <span>Subtotal</span>
           <span>{money(subtotal)}</span>
@@ -258,10 +334,11 @@ export default function Cart() {
         </div>
         {fulfillmentMethod === "delivery" && q && (
           <div className="rounded-xl bg-secondary/50 px-3 py-2 text-xs text-muted-foreground">
+            <p className="mb-1 font-extrabold text-foreground/70">Cómo se calcula el envío</p>
             <div className="flex justify-between"><span>Tarifa base</span><span>{money(q.baseFee)}</span></div>
             <div className="flex justify-between"><span>Distancia ({q.distanceKm} km)</span><span>{money(q.distanceFee)}</span></div>
-            <div className="flex justify-between"><span>Tiempo estimado ({q.estimatedMinutes} min)</span><span>{money(q.timeFee)}</span></div>
-            <p className="mt-1">Tiempo referencial; puede variar según tráfico y condiciones de la vía.</p>
+            {q.timeFee > 0 && <div className="flex justify-between"><span>Tiempo de viaje ({q.estimatedMinutes} min)</span><span>{money(q.timeFee)}</span></div>}
+            <p className="mt-1">El tiempo es referencial y puede variar según el tráfico y las condiciones de la vía.</p>
           </div>
         )}
         <div className="flex justify-between text-sm font-semibold text-muted-foreground"><span>Tarifa de servicio de Rescate</span><span>{serviceFee === null ? "—" : money(serviceFee)}</span></div>
@@ -289,17 +366,7 @@ export default function Cart() {
             navigate("/login");
             return;
           }
-          createOrder.mutate({
-            businessId: cart.businessId,
-            items: cart.items.map((i) => ({
-              productId: i.productId,
-              quantity: i.quantity,
-            })),
-            fulfillmentMethod,
-            ...(fulfillmentMethod === "delivery" ? { deliveryAddress: address.trim(), deliveryLat: deliveryCoords!.lat, deliveryLng: deliveryCoords!.lng } : {}),
-            notes: notes.trim() || undefined,
-            customerPhone: phone.trim() || undefined,
-          });
+          confirm();
         }}
         className="safe-bottom sticky bottom-20 w-full rounded-2xl bg-brand py-4 font-display text-lg font-extrabold text-white shadow-lg shadow-brand/20 transition-transform hover:brightness-105 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 md:bottom-6"
       >

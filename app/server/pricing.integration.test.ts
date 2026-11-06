@@ -189,4 +189,30 @@ describe.skipIf(!enabled)("tarifas configurables y desglose del precio (MySQL re
     const o = await order(shop, "pickup");
     expect(o.deliveryPricing!.dynamicSimulation).toBeUndefined();
   });
+
+  it("el celular del pedido se valida y se guarda normalizado", async () => {
+    const shop = await mkShop();
+    const customer = await mkUser("customer");
+    const base = { businessId: shop.businessId, items: [{ productId: shop.productId, quantity: 1 }], fulfillmentMethod: "pickup" as const };
+    const bad = await failure(callerFor(customer).orders.createDelivery({ ...base, customerPhone: "12345" }));
+    expect(bad.message).toContain("celular");
+    const res = await callerFor(customer).orders.createDelivery({ ...base, customerPhone: "+593 99 123 4567" });
+    created.orders.push(res!.order.id);
+    expect((await row(res!.order.id)).customerPhone).toBe("0991234567");
+  });
+
+  it("el teléfono del local se valida y se guarda normalizado", async () => {
+    const owner = await mkUser("business");
+    const data = {
+      name: `${tag} validación`, category: "test", address: "Calle 1 y Calle 2", deliveryFee: 1, deliveryMinutes: 30,
+      lat: -2.134, lng: -79.594,
+    };
+    const bad = await failure(callerFor(owner).business.upsertBusiness({ ...data, phone: "abc" }));
+    expect(bad.message).toContain("teléfono");
+    const res = await callerFor(owner).business.upsertBusiness({ ...data, phone: "04 212-3456" });
+    created.businesses.push(res.id);
+    const saved = (await db.select().from(S.businesses).where(eq(S.businesses.id, res.id)))[0];
+    expect(saved.phone).toBe("042123456");
+    expect(saved.imageUrl).toBeNull();
+  });
 });

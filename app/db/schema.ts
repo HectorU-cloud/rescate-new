@@ -101,6 +101,8 @@ export const businesses = mysqlTable(
     lng: double("lng").notNull(),
     phone: varchar("phone", { length: 30 }),
     emoji: varchar("emoji", { length: 8 }).default("🍽️").notNull(),
+    // Foto o logo del local (URL en el almacenamiento de imágenes). Si no hay, se muestra el emoji.
+    imageUrl: mediumtext("imageUrl"),
     isOpen: boolean("isOpen").default(true).notNull(),
     // Tarifa de envío = deliveryFee (base) + feePerKm × distancia estimada
     deliveryFee: double("deliveryFee").default(1).notNull(),

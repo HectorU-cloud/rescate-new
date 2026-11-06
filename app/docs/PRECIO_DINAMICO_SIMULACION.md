@@ -17,6 +17,8 @@ Se aplica el tramo más alto alcanzado en cada señal, se suman y el multiplicad
 Los umbrales están en `DYNAMIC_SIMULATION_RULES` (`contracts/pricing.ts`). Si los cambias, sube `DYNAMIC_SIMULATION_VERSION`. `PRICING_FORMULA_VERSION` no cambió porque el envío cobrado se calcula igual que antes.
 
 ## Dónde verlo
+Todo esto es **solo para el admin**: ni los clientes ni los locales ven el clima ni el recargo sugerido, y no se cobra. El clima aparece en Finanzas → «Precio dinámico (simulación)» como el número de pedidos con clima activo («clima en N pedidos»). La condición exacta de cada pedido queda guardada en `orders.deliveryPricing` → `dynamicSimulation.signals.weather`.
+
 Finanzas → **Precio dinámico (simulación)**: pedidos simulados, porcentaje con recargo sugerido, multiplicador medio, ingreso extra hipotético, señales activas y una comparación de tiempos reales (desde que el repartidor aceptó hasta la entrega) entre pedidos con y sin recargo sugerido. Sirve para comprobar si las señales de verdad predicen entregas más lentas. Con pocas entregas por grupo (menos de ~20) el panel avisa que no hay base para concluir.
 
 ## Cuándo pasar al siguiente paso

@@ -62,9 +62,13 @@ export default function BusinessDetail() {
     <div className="space-y-5">
       {/* Encabezado del local */}
       <section className="overflow-hidden rounded-3xl bg-card shadow-sm ring-1 ring-border">
-        <div className="grid h-36 place-items-center bg-gradient-to-br from-brand-soft to-secondary text-7xl">
-          {business.emoji}
-        </div>
+        {business.imageUrl ? (
+          <img src={business.imageUrl} alt={`Foto de ${business.name}`} className="h-36 w-full object-cover sm:h-48" />
+        ) : (
+          <div className="grid h-36 place-items-center bg-gradient-to-br from-brand-soft to-secondary text-7xl">
+            {business.emoji}
+          </div>
+        )}
         <div className="p-5">
           <div className="flex items-start justify-between gap-3">
             <div>

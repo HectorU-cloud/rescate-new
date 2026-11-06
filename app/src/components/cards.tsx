@@ -12,11 +12,17 @@ export function BusinessCard({ business }: { business: PublicBusinessView & { op
       className="group flex min-w-0 flex-col overflow-hidden rounded-[1.6rem] bg-card shadow-sm ring-1 ring-border/80 transition duration-200 hover:-translate-y-1 hover:shadow-lg"
     >
       <div className="relative grid h-36 place-items-center overflow-hidden bg-gradient-to-br from-[#e7f5e9] via-[#f6f4e8] to-[#dcefe1] sm:h-40">
-        <div className="absolute -right-7 -top-10 h-32 w-32 rounded-full border border-white/70" />
-        <div className="absolute -bottom-12 -left-5 h-32 w-32 rounded-full border border-white/70" />
-        <span className="relative drop-shadow-sm transition-transform duration-300 group-hover:scale-110" style={{ fontSize: "4.25rem" }}>
-          {business.emoji}
-        </span>
+        {business.imageUrl ? (
+          <img src={business.imageUrl} alt={`Foto de ${business.name}`} loading="lazy" className="absolute inset-0 h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+        ) : (
+          <>
+            <div className="absolute -right-7 -top-10 h-32 w-32 rounded-full border border-white/70" />
+            <div className="absolute -bottom-12 -left-5 h-32 w-32 rounded-full border border-white/70" />
+            <span className="relative drop-shadow-sm transition-transform duration-300 group-hover:scale-110" style={{ fontSize: "4.25rem" }}>
+              {business.emoji}
+            </span>
+          </>
+        )}
         <span className={`absolute left-3 top-3 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-extrabold shadow-sm ${business.openNow ? "bg-white text-[#087c5b]" : "bg-foreground text-white"}`}>
           <span className={`h-1.5 w-1.5 rounded-full ${business.openNow ? "bg-[#0b9a62]" : "bg-white/60"}`} />
           {business.openNow ? "Abierto ahora" : "Cerrado"}

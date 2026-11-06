@@ -13,7 +13,9 @@ import { ClaimBox } from "@/components/ClaimBox";
 import { LocationPicker, type Point } from "@/components/LocationPicker";
 import { isInServiceArea } from "@contracts/geo";
 import { computePackExpiry, describePackExpiry } from "@contracts/packs";
-import { IMAGE_RULES } from "@contracts/constants";
+import { compressProductImage, uploadCompressedImage } from "@/lib/product-image";
+import BusinessImageField from "@/components/BusinessImageField";
+import { PHONE_HINT, normalizeEcuadorPhone } from "@contracts/phone";
 import {
   BUSINESS_CATEGORIES,
   BUSINESS_RULES,
@@ -62,10 +64,36 @@ export default function BusinessPanel() {
 // ---------------------------------------------------------------------------
 // Registro del local
 // ---------------------------------------------------------------------------
+type SetupForm = {
+  name: string; description: string; category: string; address: string; phone: string; emoji: string;
+  deliveryFee: number; deliveryMinutes: number; feePerKm: number; deliveryRadiusKm: number; minOrder: number;
+  opensAt: string; closesAt: string;
+};
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** Reglas del formulario de registro (el servidor valida lo mismo; aquí se explica al dueño qué corregir). */
+function validateSetup(form: SetupForm, loc: Point | null): Partial<Record<keyof SetupForm | "location", string>> {
+  const errors: Partial<Record<keyof SetupForm | "location", string>> = {};
+  if (form.name.trim().length < 2) errors.name = "Escribe el nombre de tu local (mínimo 2 letras).";
+  if (form.address.trim().length < 5) errors.address = "Escribe la dirección con calle, número y una referencia.";
+  if (!form.phone.trim()) errors.phone = "Escribe un teléfono de contacto.";
+  else if (!normalizeEcuadorPhone(form.phone)) errors.phone = PHONE_HINT;
+  if (!(form.deliveryFee >= 0 && form.deliveryFee <= 20)) errors.deliveryFee = "Debe estar entre $0 y $20.";
+  if (!(form.deliveryMinutes >= 5 && form.deliveryMinutes <= 120)) errors.deliveryMinutes = "Debe estar entre 5 y 120 minutos.";
+  if (!(form.feePerKm >= 0 && form.feePerKm <= 5)) errors.feePerKm = "Debe estar entre $0 y $5 por km.";
+  if (!(form.deliveryRadiusKm >= 0.5 && form.deliveryRadiusKm <= BUSINESS_RULES.maxDeliveryRadiusKm)) errors.deliveryRadiusKm = `Debe estar entre 0,5 y ${BUSINESS_RULES.maxDeliveryRadiusKm} km.`;
+  if (!(form.minOrder >= 0 && form.minOrder <= 200)) errors.minOrder = "Debe estar entre $0 y $200.";
+  if (!TIME_RE.test(form.opensAt)) errors.opensAt = "Elige la hora de apertura.";
+  if (!TIME_RE.test(form.closesAt)) errors.closesAt = "Elige la hora de cierre.";
+  if (!loc) errors.location = "Marca la ubicación de tu local en el mapa.";
+  else if (!isInServiceArea(loc.lat, loc.lng)) errors.location = "La ubicación debe estar dentro de la zona de servicio (Milagro).";
+  return errors;
+}
+
 function BusinessSetup() {
   const utils = trpc.useUtils();
   const [loc, setLoc] = useState<Point | null>(null);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<SetupForm>({
     name: "",
     description: "",
     category: "comida-rapida",
@@ -80,39 +108,90 @@ function BusinessSetup() {
     opensAt: "08:00",
     closesAt: "22:00",
   });
-  const save = trpc.business.upsertBusiness.useMutation({
-    onSuccess: (result) => {
+  const [touched, setTouched] = useState<Partial<Record<keyof SetupForm, boolean>>>({});
+  const [submitted, setSubmitted] = useState(false);
+  // La foto se elige ahora pero se sube después de crear el local (la subida necesita que el local exista).
+  const [logoData, setLogoData] = useState<string | null>(null);
+  const save = trpc.business.upsertBusiness.useMutation({ onError: (e) => toast.error(e.message) });
+  const createImageUpload = trpc.business.createImageUpload.useMutation();
+  const setBusinessImage = trpc.business.setBusinessImage.useMutation();
+
+  const errors = validateSetup(form, loc);
+  const show = (key: keyof SetupForm | "location") => ((key === "location" ? submitted : submitted || touched[key as keyof SetupForm]) ? errors[key] : undefined);
+
+  async function submit() {
+    setSubmitted(true);
+    if (Object.keys(errors).length > 0) {
+      toast.error("Revisa los campos marcados en rojo.");
+      setTimeout(() => {
+        const first = document.querySelector<HTMLElement>("[aria-invalid='true'], [data-invalid='true']");
+        first?.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (first && "focus" in first) first.focus({ preventScroll: true });
+      }, 0);
+      return;
+    }
+    try {
+      const result = await save.mutateAsync({
+        ...form,
+        name: form.name.trim(),
+        address: form.address.trim(),
+        description: form.description.trim() || undefined,
+        phone: form.phone.trim(),
+        emoji: form.emoji.trim() || "🍽️",
+        lat: loc!.lat,
+        lng: loc!.lng,
+      });
+      if (logoData) {
+        try {
+          const imageUrl = await uploadCompressedImage(logoData, "business-logo", createImageUpload.mutateAsync);
+          await setBusinessImage.mutateAsync({ imageUrl });
+        } catch {
+          toast.warning("Tu local se envió, pero no pudimos subir la foto. Puedes agregarla después desde el panel.");
+        }
+      }
       toast.success(result.reviewRequired
         ? "Nombre/dirección enviados a revisión. Los datos actuales seguirán publicados hasta la aprobación."
         : "Datos del local guardados.");
-      utils.business.myBusiness.invalidate();
-      utils.catalog.invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
+      await utils.business.myBusiness.invalidate();
+      void utils.catalog.invalidate();
+    } catch {
+      // el error del guardado ya se muestra en un aviso
+    }
+  }
+
+  const inputClass = (invalid: boolean) =>
+    `w-full rounded-xl border bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring ${invalid ? "border-destructive" : "border-input"}`;
+  const errorText = (message?: string) => message ? <span role="alert" className="mt-1 block text-xs font-bold text-destructive">{message}</span> : null;
 
   const field = (
     label: string,
-    key: keyof typeof form,
-    props: React.InputHTMLAttributes<HTMLInputElement> = {},
-  ) => (
-    <label className="block">
-      <span className="mb-1 block text-xs font-extrabold text-muted-foreground">
-        {label}
-      </span>
-      <input
-        {...props}
-        value={form[key] as string | number}
-        onChange={(e) =>
-          setForm((f) => ({
-            ...f,
-            [key]: props.type === "number" ? Number(e.target.value) : e.target.value,
-          }))
-        }
-        className="w-full rounded-xl border border-input bg-background px-4 py-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
-      />
-    </label>
-  );
+    key: keyof SetupForm,
+    props: React.InputHTMLAttributes<HTMLInputElement> & { required?: boolean } = {},
+  ) => {
+    const { required, ...inputProps } = props;
+    const message = show(key);
+    return (
+      <label className="block">
+        <span className="mb-1 block text-xs font-extrabold text-muted-foreground">
+          {label}{required && <span className="text-destructive"> *</span>}
+        </span>
+        <input
+          {...inputProps}
+          value={form[key] as string | number}
+          aria-invalid={message ? true : undefined}
+          onBlur={() => setTouched((t) => ({ ...t, [key]: true }))}
+          onChange={(e) =>
+            setForm((f) => ({
+              ...f,
+              [key]: props.type === "number" ? Number(e.target.value) : e.target.value,
+            }))
+          }
+          className={inputClass(!!message)}
+        />
+        {errorText(message)}
+      </label>
+    );
+  };
 
   return (
     <div className="mx-auto max-w-lg space-y-4">
@@ -121,17 +200,18 @@ function BusinessSetup() {
           Registra tu local 🏪
         </h1>
         <p className="text-sm font-semibold text-muted-foreground">
-          En 1 minuto empiezas a vender en Milagro
+          En 1 minuto empiezas a vender en Milagro. Los campos con <span className="text-destructive">*</span> son obligatorios.
         </p>
       </div>
       <div className="space-y-3 rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
-        {field("Nombre del local", "name", { placeholder: "Panadería El Trigal" })}
+        {field("Nombre del local", "name", { placeholder: "Panadería El Trigal", required: true, maxLength: 150 })}
         {field("Descripción corta", "description", {
           placeholder: "Qué vendes y qué te hace especial",
+          maxLength: 500,
         })}
         <label className="block">
           <span className="mb-1 block text-xs font-extrabold text-muted-foreground">
-            Categoría
+            Categoría <span className="text-destructive">*</span>
           </span>
           <select
             value={form.category}
@@ -147,43 +227,63 @@ function BusinessSetup() {
         </label>
         {field("Dirección en Milagro", "address", {
           placeholder: "Calle, número, referencia",
+          required: true,
+          maxLength: 255,
+        })}
+        {field("Teléfono de contacto", "phone", {
+          type: "tel",
+          inputMode: "tel",
+          autoComplete: "tel",
+          placeholder: "0991234567",
+          required: true,
+          maxLength: 20,
         })}
         <div className="grid grid-cols-2 gap-3">
           {field("Tarifa de envío ($)", "deliveryFee", {
             type: "number",
             min: 0,
             step: 0.25,
+            required: true,
           })}
           {field("Tiempo de entrega (min)", "deliveryMinutes", {
             type: "number",
             min: 5,
+            required: true,
           })}
         </div>
         <div className="grid grid-cols-2 gap-3">
-          {field("Costo por km ($)", "feePerKm", { type: "number", min: 0, step: 0.05 })}
-          {field("Radio de entrega (km)", "deliveryRadiusKm", { type: "number", min: 0.5, max: 15, step: 0.5 })}
+          {field("Costo por km ($)", "feePerKm", { type: "number", min: 0, step: 0.05, required: true })}
+          {field("Radio de entrega (km)", "deliveryRadiusKm", { type: "number", min: 0.5, max: 15, step: 0.5, required: true })}
           {field("Pedido mínimo ($)", "minOrder", { type: "number", min: 0, step: 0.5 })}
           <span />
-          {field("Abre a las", "opensAt", { type: "time" })}
-          {field("Cierra a las", "closesAt", { type: "time" })}
+          {field("Abre a las", "opensAt", { type: "time", required: true })}
+          {field("Cierra a las", "closesAt", { type: "time", required: true })}
         </div>
         <p className="text-[11px] text-muted-foreground">
           Envío = tarifa base + costo por km según la distancia al cliente. Horario en hora de Ecuador.
         </p>
         {field("Emoji de tu local", "emoji", { placeholder: "🍕", maxLength: 4 })}
-        <div className="space-y-2">
-          <p className="text-xs font-extrabold text-muted-foreground">📍 Ubicación exacta de tu local</p>
+        <BusinessImageField
+          previewUrl={logoData}
+          emoji={form.emoji}
+          busy={save.isPending}
+          onSelect={(dataUrl) => setLogoData(dataUrl)}
+          onRemove={() => setLogoData(null)}
+        />
+        <div className="space-y-2" data-invalid={show("location") ? "true" : undefined} tabIndex={-1}>
+          <p className="text-xs font-extrabold text-muted-foreground">📍 Ubicación exacta de tu local <span className="text-destructive">*</span></p>
           <p className="text-[11px] text-muted-foreground">
             De este punto salen el costo de envío por km, el radio de entrega y la ruta del repartidor. Es obligatoria.
           </p>
           <LocationPicker value={loc} onChange={setLoc} />
+          {errorText(show("location"))}
         </div>
         <button
-          disabled={save.isPending || form.name.length < 2 || form.address.length < 5 || !loc || !isInServiceArea(loc.lat, loc.lng)}
-          onClick={() => loc && save.mutate({ ...form, lat: loc.lat, lng: loc.lng })}
+          disabled={save.isPending || setBusinessImage.isPending}
+          onClick={() => void submit()}
           className="w-full rounded-2xl bg-brand py-3.5 font-display text-base font-extrabold text-white disabled:opacity-50"
         >
-          {save.isPending ? "Guardando…" : "Enviar mi local a revisión"}
+          {save.isPending || setBusinessImage.isPending ? "Guardando…" : "Enviar mi local a revisión"}
         </button>
       </div>
     </div>
@@ -207,6 +307,8 @@ function Panel({
   business: {
     approvalStatus: "pending" | "approved" | "rejected";
     approvalNote: string | null;
+    imageUrl: string | null;
+    emoji: string;
     locationConfirmed: boolean;
     lat: number;
     lng: number;
@@ -260,6 +362,8 @@ function Panel({
         </p>
       )}
 
+      <BusinessLogoCard imageUrl={business.imageUrl} emoji={business.emoji} />
+
       <LocationCard business={business} />
 
       <DeliveryRulesCard business={business} />
@@ -304,6 +408,48 @@ function Panel({
       {tab === "rescate" && <RescueTab />}
       {tab === "resenas" && <ReviewsTab />}
     </div>
+  );
+}
+
+function BusinessLogoCard({ imageUrl, emoji }: { imageUrl: string | null; emoji: string }) {
+  const utils = trpc.useUtils();
+  const createImageUpload = trpc.business.createImageUpload.useMutation();
+  const setBusinessImage = trpc.business.setBusinessImage.useMutation({
+    onError: (e) => toast.error(e.message),
+  });
+  // Mientras se sube una foto nueva se muestra esa; si no, la guardada.
+  const [pending, setPending] = useState<string | null>(null);
+  const busy = createImageUpload.isPending || setBusinessImage.isPending;
+
+  async function refresh() {
+    await utils.business.myBusiness.invalidate();
+    void utils.catalog.invalidate();
+  }
+
+  return (
+    <section className="rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">
+      <BusinessImageField
+        previewUrl={pending ?? imageUrl}
+        emoji={emoji}
+        busy={busy}
+        onSelect={async (dataUrl) => {
+          setPending(dataUrl);
+          try {
+            const url = await uploadCompressedImage(dataUrl, "business-logo", createImageUpload.mutateAsync);
+            await setBusinessImage.mutateAsync({ imageUrl: url });
+            await refresh();
+            toast.success("Foto del local actualizada");
+          } finally {
+            setPending(null);
+          }
+        }}
+        onRemove={async () => {
+          await setBusinessImage.mutateAsync({ imageUrl: null });
+          await refresh();
+          toast.success("Foto quitada: se mostrará el emoji");
+        }}
+      />
+    </section>
   );
 }
 
@@ -711,58 +857,6 @@ function OrdersTab({ businessId }: { businessId: number }) {
 // ---------------------------------------------------------------------------
 // Menú (productos)
 // ---------------------------------------------------------------------------
-async function compressProductImage(file: File): Promise<string> {
-  if (!file.type.startsWith("image/")) throw new Error("Selecciona un archivo de imagen.");
-  if (file.size > 10 * 1024 * 1024) throw new Error("La imagen debe pesar menos de 10 MB.");
-  const source = URL.createObjectURL(file);
-  try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error("No se pudo leer la imagen."));
-      img.src = source;
-    });
-    const scale = Math.min(1, 900 / Math.max(image.width, image.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.max(1, Math.round(image.width * scale));
-    canvas.height = Math.max(1, Math.round(image.height * scale));
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("No se pudo procesar la imagen.");
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    let result = canvas.toDataURL("image/jpeg", 0.68);
-    if (result.length > 450_000) result = canvas.toDataURL("image/jpeg", 0.48);
-    if (result.length > 500_000) throw new Error("La imagen sigue siendo muy pesada. Prueba con otra foto.");
-    return result;
-  } finally {
-    URL.revokeObjectURL(source);
-  }
-}
-
-type ImageUploadInput = {
-  contentType: "image/jpeg";
-  kind: "product" | "rescue-pack";
-  size: number;
-};
-type ImageUploadResult = { uploadUrl: string; imageUrl: string };
-
-async function uploadCompressedImage(
-  dataUrl: string,
-  kind: ImageUploadInput["kind"],
-  createUpload: (input: ImageUploadInput) => Promise<ImageUploadResult>,
-): Promise<string> {
-  const blob = await fetch(dataUrl).then((response) => response.blob());
-  if (blob.type !== "image/jpeg") throw new Error("La imagen optimizada no tiene un formato válido.");
-  if (blob.size > IMAGE_RULES.maxBytes) throw new Error("La imagen es muy pesada (máximo 2 MB). Prueba con otra foto.");
-  const target = await createUpload({ contentType: "image/jpeg", kind, size: blob.size });
-  const response = await fetch(target.uploadUrl, {
-    method: "PUT",
-    headers: { "Content-Type": "image/jpeg" },
-    body: blob,
-  });
-  if (!response.ok) throw new Error("No se pudo guardar la imagen en el almacenamiento. Revisa el bucket y su configuración CORS.");
-  return target.imageUrl;
-}
-
 function MenuTab() {
   const utils = trpc.useUtils();
   const list = trpc.business.products.useQuery();

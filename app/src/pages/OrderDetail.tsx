@@ -154,8 +154,10 @@ export default function OrderDetail() {
       {/* Encabezado */}
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
         <div className="flex items-center gap-3">
-          <span className="grid h-14 w-14 place-items-center rounded-2xl bg-secondary text-3xl">
-            {order.type === "rescue" ? "🧡" : business?.emoji ?? "🍽️"}
+          <span className="grid h-14 w-14 place-items-center overflow-hidden rounded-2xl bg-secondary text-3xl">
+            {order.type !== "rescue" && business?.imageUrl
+              ? <img src={business.imageUrl} alt="" className="h-full w-full object-cover" />
+              : order.type === "rescue" ? "🧡" : business?.emoji ?? "🍽️"}
           </span>
           <div className="min-w-0 flex-1">
             <h1 className="font-display truncate text-xl font-extrabold">

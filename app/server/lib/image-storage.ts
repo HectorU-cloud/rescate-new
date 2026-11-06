@@ -30,7 +30,7 @@ function getClient() {
 }
 
 /** Carpetas donde cada dueño puede subir y desde donde puede usar imágenes. */
-export const businessImageFolder = (businessId: number, kind: "product" | "rescue-pack") => `businesses/${businessId}/${kind}`;
+export const businessImageFolder = (businessId: number, kind: "product" | "rescue-pack" | "business-logo") => `businesses/${businessId}/${kind}`;
 export const courierPhotoFolder = (userId: number) => `couriers/${userId}/profile`;
 /** Comprobantes de pago de una cuenta (courier: id del usuario; business: id del comercio). */
 export const paymentProofFolder = (walletType: "courier" | "business", walletId: number) => `payments/${walletType}/${walletId}/proof`;
@@ -40,7 +40,7 @@ export async function createImageUploadUrl(args: {
   contentType: SupportedImageMime;
   /** Tamaño exacto en bytes del archivo que se va a subir. Queda atado a la firma. */
   size: number;
-  kind: "product" | "rescue-pack" | "courier-profile" | "payment-proof";
+  kind: "product" | "rescue-pack" | "business-logo" | "courier-profile" | "payment-proof";
   ownerId?: number;
   /** Carpeta destino (obligatoria para "payment-proof"). */
   folder?: string;

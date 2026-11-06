@@ -14,6 +14,7 @@ import { codesMatch } from "./lib/codes";
 import { assertValidImageUrl, businessImageFolder, createImageUploadUrl, deleteStoredImage, promoteStagedImageUrl, type SupportedImageMime } from "./lib/image-storage";
 import { releaseReplacedImage } from "./lib/image-cleanup";
 import { IMAGE_RULES } from "@contracts/constants";
+import { PHONE_HINT, normalizeEcuadorPhone } from "@contracts/phone";
 import { notifyCouriersOrderReady, notifyOrderStatus, sendPushToUser, sendPushToUsers } from "./lib/push-notifications";
 import { logOrderEvent } from "./lib/order-events";
 import { MIN_CANCEL_REASON_LENGTH, businessCancelNeedsReason, businessCancelableFrom, canBusinessCancel } from "./lib/order-rules";
@@ -104,7 +105,7 @@ export const businessRouter = createRouter({
   createImageUpload: authedQuery
     .input(z.object({
       contentType: z.enum(["image/jpeg", "image/png", "image/webp"]),
-      kind: z.enum(["product", "rescue-pack"]),
+      kind: z.enum(["product", "rescue-pack", "business-logo"]),
       // Tamaño exacto del archivo en bytes: queda atado a la firma de la URL de subida
       size: z.number().int().min(1).max(IMAGE_RULES.maxBytes),
     }))
@@ -126,6 +127,20 @@ export const businessRouter = createRouter({
     );
   }),
 
+  // Foto o logo del local. Reutiliza el flujo de las fotos de productos: la imagen se sube primero con
+  // createImageUpload (kind "business-logo") y aquí se confirma; solo se aceptan imágenes subidas por este dueño.
+  setBusinessImage: authedQuery
+    .input(z.object({ imageUrl: z.string().max(2000).nullable() }))
+    .mutation(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      const folder = businessImageFolder(biz.id, "business-logo");
+      const finalImageUrl = await promoteStagedImageUrl(input.imageUrl, folder);
+      assertValidImageUrl(finalImageUrl, folder, biz.imageUrl);
+      await getDb().update(businesses).set({ imageUrl: finalImageUrl ?? null }).where(eq(businesses.id, biz.id));
+      await releaseReplacedImage(biz.imageUrl, finalImageUrl ?? null, folder);
+      return { imageUrl: finalImageUrl ?? null };
+    }),
+
   upsertBusiness: authedQuery
     .input(
       z.object({
@@ -133,7 +148,7 @@ export const businessRouter = createRouter({
         description: z.string().max(500).optional(),
         category: z.string().min(2).max(60),
         address: z.string().min(5).max(255),
-        phone: z.string().max(30).optional(),
+        phone: z.string().trim().max(30).refine((v) => v === "" || normalizeEcuadorPhone(v) !== null, PHONE_HINT).optional(),
         emoji: z.string().max(8).optional(),
         deliveryFee: z.number().min(0).max(20),
         deliveryMinutes: z.number().min(5).max(120),
@@ -150,6 +165,8 @@ export const businessRouter = createRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const { lat, lng, ...data } = input;
+      // El teléfono se guarda normalizado (0991234567); vacío = no se envía.
+      data.phone = data.phone ? (normalizeEcuadorPhone(data.phone) ?? undefined) : undefined;
       if ((lat === undefined) !== (lng === undefined)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Envía latitud y longitud juntas" });
       }
