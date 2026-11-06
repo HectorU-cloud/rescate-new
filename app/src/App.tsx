@@ -1,5 +1,6 @@
 import { Routes, Route } from "react-router";
 import AppShell from "@/components/AppShell";
+import RequireAuth from "@/components/RequireAuth";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
@@ -30,25 +31,27 @@ export default function App() {
       <Route
         path="*"
         element={
-          <AppShell>
-            <Routes>
-              <Route path="/" element={<Home />} />
-              <Route path="/negocio/:id" element={<BusinessDetail />} />
-              <Route path="/carrito" element={<Cart />} />
-              <Route path="/pedidos" element={<Orders />} />
-              <Route path="/pedido/:id" element={<OrderDetail />} />
-              <Route path="/rescate" element={<Rescue />} />
-              <Route path="/bienvenida" element={<Onboarding />} />
-              <Route path="/panel" element={<BusinessPanel />} />
-              <Route path="/repartidor" element={<CourierPanel />} />
-              <Route path="/perfil" element={<Profile />} />
-              <Route path="/notificaciones" element={<Notifications />} />
-              <Route path="/admin" element={<AdminDashboard />} />
-              <Route path="/admin/repartidores" element={<AdminCouriers />} />
-              <Route path="/admin/verificacion" element={<AdminCourierReview />} />
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </AppShell>
+          <RequireAuth>
+            <AppShell>
+              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/negocio/:id" element={<BusinessDetail />} />
+                <Route path="/carrito" element={<Cart />} />
+                <Route path="/pedidos" element={<Orders />} />
+                <Route path="/pedido/:id" element={<OrderDetail />} />
+                <Route path="/rescate" element={<Rescue />} />
+                <Route path="/bienvenida" element={<Onboarding />} />
+                <Route path="/panel" element={<BusinessPanel />} />
+                <Route path="/repartidor" element={<CourierPanel />} />
+                <Route path="/perfil" element={<Profile />} />
+                <Route path="/notificaciones" element={<Notifications />} />
+                <Route path="/admin" element={<AdminDashboard />} />
+                <Route path="/admin/repartidores" element={<AdminCouriers />} />
+                <Route path="/admin/verificacion" element={<AdminCourierReview />} />
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </AppShell>
+          </RequireAuth>
         }
       />
     </Routes>

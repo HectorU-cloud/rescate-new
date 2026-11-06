@@ -244,7 +244,6 @@ export default function Profile() {
         <button onClick={() => pushEnabled ? void disablePush() : void enablePush()} disabled={pushBusy || pushStatus.isLoading} className="mt-3 w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50">
           {pushBusy ? "Procesando…" : pushEnabled ? "Desactivar notificaciones en este dispositivo" : "Activar notificaciones"}
         </button>
-        <p className="mt-2 text-[11px] text-muted-foreground">Requiere HTTPS (o localhost), permiso del navegador y configuración de Firebase Cloud Messaging.</p>
       </section>
 
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
