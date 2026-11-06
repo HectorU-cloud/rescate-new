@@ -40,6 +40,8 @@ export default function AdminFinance() {
   const [minFee, setMinFee] = useState("");
   const [maxFee, setMaxFee] = useState("");
   const [dynamic, setDynamic] = useState(false);
+  const [weatherMode, setWeatherMode] = useState<"off" | "heavy" | "rain">("off");
+  const [weatherAmount, setWeatherAmount] = useState("0.5");
   const [instructions, setInstructions] = useState("");
 
   const activeWallets = useMemo(() => (wallets.data ?? []).filter((w) => w.walletType === walletType), [wallets.data, walletType]);
@@ -52,6 +54,7 @@ export default function AdminFinance() {
     setPerKm(String(selectedSettings.deliveryPerKm)); setPerMinute(String(selectedSettings.deliveryPerMinute));
     setMinFee(String(selectedSettings.minDeliveryFee)); setMaxFee(String(selectedSettings.maxDeliveryFee));
     setDynamic(selectedSettings.dynamicPricingEnabled); setInstructions(selectedSettings.paymentInstructions ?? "");
+    setWeatherMode(selectedSettings.weatherSurchargeMode); setWeatherAmount(String(selectedSettings.weatherSurcharge));
   }, [selectedSettings?.id]);
 
   const submitEntry = () => {
@@ -87,13 +90,23 @@ export default function AdminFinance() {
           <label className="text-xs font-bold">Envío mínimo ($)<input className={`${field} mt-1`} type="number" min="0" step="0.05" value={minFee} onChange={e=>setMinFee(e.target.value)} /></label>
           <label className="text-xs font-bold">Envío máximo ($)<input className={`${field} mt-1`} type="number" min="0" step="0.05" value={maxFee} onChange={e=>setMaxFee(e.target.value)} /></label>
         </div>
+        <div className="mt-4 rounded-xl border border-border p-3">
+          <p className="text-sm font-extrabold">🌧️ Recargo por mal clima (se cobra al cliente y va completo al repartidor)</p>
+          <p className="mt-1 text-xs text-muted-foreground">Se suma al envío, fuera de los topes mínimo y máximo, y el cliente lo ve desglosado. Necesita <code>WEATHER_ENABLED=true</code> y la clave de OpenWeather en el servidor; si no se puede saber el clima, no se cobra.</p>
+          <div className="mt-2 grid grid-cols-2 gap-3">
+            <label className="text-xs font-bold">Cuándo se cobra<select className={`${field} mt-1`} value={weatherMode} onChange={e=>setWeatherMode(e.target.value as "off" | "heavy" | "rain")}><option value="off">Nunca (desactivado)</option><option value="heavy">Solo lluvia fuerte o tormenta</option><option value="rain">Cualquier lluvia o llovizna</option></select></label>
+            <label className="text-xs font-bold">Recargo ($)<input className={`${field} mt-1`} type="number" min="0" max="10" step="0.05" value={weatherAmount} onChange={e=>setWeatherAmount(e.target.value)} /></label>
+          </div>
+        </div>
         <label className="mt-3 flex items-center gap-2 text-sm font-bold"><input type="checkbox" checked={dynamic} onChange={e=>setDynamic(e.target.checked)} /> Habilitar precios dinámicos (solo configuración; la simulación corre siempre y no cobra nada)</label>
         <label className="mt-3 block text-xs font-bold">Cómo pagar a Rescate (lo ven repartidores y comercios al reportar un pago)<textarea className={`${field} mt-1`} rows={3} maxLength={1000} value={instructions} onChange={e=>setInstructions(e.target.value)} placeholder={"Banco, tipo y n.º de cuenta, titular, cédula/RUC…"} /></label>
         <button disabled={saveSettings.isPending} onClick={()=>{
           const values = [fee,courierLimit,businessLimit,baseFee,perKm,perMinute,minFee,maxFee].map(Number);
           if (values.some(v=>!Number.isFinite(v)||v<0)) return toast.error("Todos los valores deben ser números positivos o cero");
           if (values[7] < values[6]) return toast.error("El envío máximo no puede ser menor que el mínimo");
-          saveSettings.mutate({serviceFee:values[0],courierDebtLimit:values[1],businessDebtLimit:values[2],deliveryBaseFee:values[3],deliveryPerKm:values[4],deliveryPerMinute:values[5],minDeliveryFee:values[6],maxDeliveryFee:values[7],dynamicPricingEnabled:dynamic,paymentInstructions:instructions.trim()||null});
+          const weatherValue = Number(weatherAmount);
+          if (!Number.isFinite(weatherValue) || weatherValue < 0 || weatherValue > 10) return toast.error("El recargo por clima debe estar entre 0 y 10");
+          saveSettings.mutate({weatherSurchargeMode:weatherMode,weatherSurcharge:weatherValue,serviceFee:values[0],courierDebtLimit:values[1],businessDebtLimit:values[2],deliveryBaseFee:values[3],deliveryPerKm:values[4],deliveryPerMinute:values[5],minDeliveryFee:values[6],maxDeliveryFee:values[7],dynamicPricingEnabled:dynamic,paymentInstructions:instructions.trim()||null});
         }} className="mt-4 rounded-xl bg-brand px-4 py-2.5 text-sm font-extrabold text-white disabled:opacity-50">Guardar configuración</button>
       </>}
     </section>

@@ -15,7 +15,7 @@ import { quoteDeliveryWithGoogleRoutes } from "./lib/google-routes";
 import { logOrderEvent } from "./lib/order-events";
 import { recomputeBusinessRating, recomputeCourierRating } from "./lib/ratings";
 import { canCustomerCancel } from "./lib/order-rules";
-import { loadPricingConfig, simulateDeliveryPricing } from "./lib/pricing";
+import { applyWeatherSurcharge, loadPricingConfig, simulateDeliveryPricing } from "./lib/pricing";
 import { buildPricingSnapshot } from "@contracts/pricing";
 import { shouldShowCourier, toPublicCourier } from "./lib/courier-public";
 import { getDb } from "./queries/connection";
@@ -90,6 +90,8 @@ export const ordersRouter = createRouter({
         deliveryLng: z.number().min(-180).max(180).optional(),
         notes: z.string().max(300).optional(),
         customerPhone: customerPhoneInput,
+        // El envío que el cliente vio al confirmar. Si el clima lo encareció después, se le avisa en vez de cobrarle de más.
+        expectedDeliveryFee: z.number().min(0).max(1000).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -107,8 +109,9 @@ export const ordersRouter = createRouter({
       if (!isPickup && (!input.deliveryAddress || input.deliveryAddress.trim().length < 5 || input.deliveryLat == null || input.deliveryLng == null)) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Para entrega a domicilio debes indicar dirección y ubicación GPS." });
       }
-      const { serviceFee, pricing } = await loadPricingConfig();
-      const quote = !isPickup ? await quoteDeliveryWithGoogleRoutes(business, input.deliveryLat!, input.deliveryLng!, pricing) : null;
+      const { serviceFee, pricing, weather } = await loadPricingConfig();
+      const baseQuote = !isPickup ? await quoteDeliveryWithGoogleRoutes(business, input.deliveryLat!, input.deliveryLng!, pricing) : null;
+      const quote = baseQuote ? await applyWeatherSurcharge(business, baseQuote, weather) : null;
       if (quote && !quote.withinRadius) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `Tu ubicación está a ${quote.distanceKm} km y este local entrega hasta ${quote.radiusKm} km.` });
       }
@@ -134,9 +137,13 @@ export const ordersRouter = createRouter({
       }
       // La tarifa la calcula siempre el servidor; el cliente no puede fijarla.
       const deliveryFee = quote?.fee ?? 0;
+      if (quote && input.expectedDeliveryFee !== undefined && deliveryFee > input.expectedDeliveryFee + 0.004) {
+        throw new TRPCError({ code: "CONFLICT", message: `El costo de envío cambió a $${deliveryFee.toFixed(2)}${quote.weatherFee > 0 ? " por el mal clima" : ""}. Revisa el total y confirma de nuevo.` });
+      }
       // Tarifa de servicio al cliente: la que configura el admin (el negocio no paga comisión en esta fase).
       // Modo simulación del precio dinámico: se registra lo que se habría sugerido, pero NO se cobra (el total usa `deliveryFee`).
-      const simulation = quote ? await simulateDeliveryPricing(business, quote) : null;
+      // La simulación mide el envío SIN el recargo de clima (ese ya se cobra aparte).
+      const simulation = quote ? await simulateDeliveryPricing(business, { ...quote, fee: Math.round((quote.fee - quote.weatherFee) * 100) / 100 }) : null;
       const pricingSnapshot = buildPricingSnapshot(quote, serviceFee, simulation);
       const total = subtotal + deliveryFee + serviceFee;
 
@@ -285,9 +292,9 @@ export const ordersRouter = createRouter({
       const db = getDb();
       const business = await db.query.businesses.findFirst({ where: eq(businesses.id, input.businessId) });
       if (!business || !isBusinessPublic(business)) throw new TRPCError({ code: "NOT_FOUND", message: "El local no está disponible" });
-      const { serviceFee, pricing } = await loadPricingConfig();
+      const { serviceFee, pricing, weather } = await loadPricingConfig();
       return {
-        ...await quoteDeliveryWithGoogleRoutes(business, input.lat, input.lng, pricing),
+        ...await applyWeatherSurcharge(business, await quoteDeliveryWithGoogleRoutes(business, input.lat, input.lng, pricing), weather),
         serviceFee,
         openNow: isBusinessOpenNow(business),
         opensAt: business.opensAt,

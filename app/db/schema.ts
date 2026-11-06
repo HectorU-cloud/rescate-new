@@ -474,6 +474,9 @@ export const financeSettings = mysqlTable("finance_settings", {
   minDeliveryFee: double("minDeliveryFee").default(1.5).notNull(),
   maxDeliveryFee: double("maxDeliveryFee").default(12).notNull(),
   dynamicPricingEnabled: boolean("dynamicPricingEnabled").default(false).notNull(),
+  // Recargo fijo por mal clima que se suma al envío y va al repartidor. "off" = no se cobra.
+  weatherSurchargeMode: mysqlEnum("weatherSurchargeMode", ["off", "heavy", "rain"]).default("off").notNull(),
+  weatherSurcharge: double("weatherSurcharge").default(0.5).notNull(),
   // Cómo pagar a Rescate (cuenta, titular…): se muestra a repartidores y comercios al reportar un pago
   paymentInstructions: text("paymentInstructions"),
   updatedBy: bigint("updatedBy", { mode: "number", unsigned: true }).references(() => users.id, { onDelete: "set null" }),

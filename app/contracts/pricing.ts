@@ -55,6 +55,9 @@ export type DeliveryPricingSnapshot = {
   clamp: FeeClamp;
   deliveryFee: number;
   serviceFee: number;
+  /** Recargo por mal clima incluido en `deliveryFee` (va al repartidor). Solo está si se cobró. */
+  weatherFee?: number;
+  weatherCondition?: WeatherCondition;
   /** Solo en pedidos a domicilio creados con el modo simulación: lo que se habría sugerido cobrar. Nunca se cobra. */
   dynamicSimulation?: DynamicSimulation;
 };
@@ -71,7 +74,10 @@ export type QuoteForSnapshot = {
   minFee?: number;
   maxFee?: number;
   clamp: FeeClamp;
+  /** Total del envío (ya incluye `weatherFee` si lo hubo). */
   fee: number;
+  weatherFee?: number;
+  weatherCondition?: WeatherCondition | null;
   routeProvider?: "google" | "fallback";
 };
 
@@ -101,9 +107,33 @@ export function buildPricingSnapshot(quote: QuoteForSnapshot | null, serviceFee:
     clamp: quote.clamp,
     deliveryFee: quote.fee,
     serviceFee: round2(serviceFee),
+    ...(quote.weatherFee && quote.weatherFee > 0 && quote.weatherCondition
+      ? { weatherFee: round2(quote.weatherFee), weatherCondition: quote.weatherCondition }
+      : {}),
     ...(simulation ? { dynamicSimulation: simulation } : {}),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Recargo por mal clima (SÍ se cobra). Monto fijo que se suma al envío y va completo al repartidor.
+// ---------------------------------------------------------------------------
+
+/** "off": no se cobra · "heavy": solo con lluvia fuerte o tormenta · "rain": con cualquier lluvia o llovizna. */
+export type WeatherSurchargeMode = "off" | "heavy" | "rain";
+export const WEATHER_SURCHARGE_MODES = ["off", "heavy", "rain"] as const;
+export const DEFAULT_WEATHER_SURCHARGE = 0.5;
+
+/**
+ * Recargo que corresponde con el clima actual. Sin dato de clima (null: sin clave, falló la consulta…) NUNCA se
+ * cobra: no se le sube el precio a nadie por no saber qué tiempo hace.
+ */
+export function weatherSurcharge(args: { mode: WeatherSurchargeMode; amount: number; condition: WeatherCondition | null }): { fee: number; condition: WeatherCondition | null } {
+  const { mode, condition } = args;
+  const applies = condition !== null && ((mode === "heavy" && condition === "heavy_rain") || (mode === "rain" && condition !== "clear"));
+  return { fee: applies && args.amount > 0 ? round2(args.amount) : 0, condition };
+}
+
+export const WEATHER_LABEL: Record<WeatherCondition, string> = { clear: "despejado", light_rain: "lluvia ligera", heavy_rain: "lluvia fuerte" };
 
 // ---------------------------------------------------------------------------
 // Precio dinámico — MODO SIMULACIÓN

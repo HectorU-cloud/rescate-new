@@ -1,3 +1,4 @@
+import { WEATHER_LABEL } from "@contracts/pricing";
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
@@ -50,7 +51,11 @@ export default function Cart() {
       toast.success("¡Pedido enviado al local!");
       if (data) navigate(`/pedido/${data.order.id}`);
     },
-    onError: (e) => toast.error(e.message),
+    onError: (e) => {
+      toast.error(e.message);
+      // Si el envío cambió (p. ej. empezó a llover), se vuelve a cotizar para mostrar el total actualizado.
+      if (e.data?.code === "CONFLICT") void quote.refetch();
+    },
   });
 
   if (!cart || cart.items.length === 0) {
@@ -124,6 +129,7 @@ export default function Cart() {
       ...(isDelivery ? { deliveryAddress: address.trim(), deliveryLat: deliveryCoords!.lat, deliveryLng: deliveryCoords!.lng } : {}),
       notes: notes.trim() || undefined,
       customerPhone: normalizeEcuadorMobile(phone) ?? undefined,
+      ...(isDelivery && q ? { expectedDeliveryFee: q.fee } : {}),
     });
   }
 
@@ -338,6 +344,9 @@ export default function Cart() {
             <div className="flex justify-between"><span>Tarifa base</span><span>{money(q.baseFee)}</span></div>
             <div className="flex justify-between"><span>Distancia ({q.distanceKm} km)</span><span>{money(q.distanceFee)}</span></div>
             {q.timeFee > 0 && <div className="flex justify-between"><span>Tiempo de viaje ({q.estimatedMinutes} min)</span><span>{money(q.timeFee)}</span></div>}
+            {q.weatherFee > 0 && q.weatherCondition && (
+              <div className="flex justify-between font-bold text-foreground/80"><span>🌧️ Recargo por {WEATHER_LABEL[q.weatherCondition]} (para el repartidor)</span><span>{money(q.weatherFee)}</span></div>
+            )}
             <p className="mt-1">El tiempo es referencial y puede variar según el tráfico y las condiciones de la vía.</p>
           </div>
         )}

@@ -1,19 +1,23 @@
 import { and, count, eq, gte, inArray, isNull } from "drizzle-orm";
 import { financeSettings, orders, users } from "@db/schema";
-import { DEFAULT_SERVICE_FEE, simulateDynamicPricing } from "@contracts/pricing";
+import { DEFAULT_SERVICE_FEE, DEFAULT_WEATHER_SURCHARGE, simulateDynamicPricing, weatherSurcharge, type WeatherSurchargeMode } from "@contracts/pricing";
 import { getDb } from "../queries/connection";
 import { getWeatherCondition } from "./weather";
 import type { DeliveryPricing } from "./business-rules";
+import type { WeatherCondition } from "@contracts/pricing";
 
 /**
  * Tarifas vigentes que configuró el admin. Si todavía no guardó la configuración (no existe la fila), la tarifa de
  * servicio usa el valor de lanzamiento y el envío usa las tarifas de cada local, sin topes (como antes).
  */
-export async function loadPricingConfig(): Promise<{ serviceFee: number; pricing: DeliveryPricing | undefined }> {
+export type WeatherConfig = { mode: WeatherSurchargeMode; amount: number };
+
+export async function loadPricingConfig(): Promise<{ serviceFee: number; pricing: DeliveryPricing | undefined; weather: WeatherConfig }> {
   const [row] = await getDb().select().from(financeSettings).where(eq(financeSettings.id, 1)).limit(1);
-  if (!row) return { serviceFee: DEFAULT_SERVICE_FEE, pricing: undefined };
+  if (!row) return { serviceFee: DEFAULT_SERVICE_FEE, pricing: undefined, weather: { mode: "off", amount: DEFAULT_WEATHER_SURCHARGE } };
   return {
     serviceFee: Number(row.serviceFee),
+    weather: { mode: row.weatherSurchargeMode, amount: Number(row.weatherSurcharge) },
     pricing: {
       baseFee: Number(row.deliveryBaseFee),
       perKm: Number(row.deliveryPerKm),
@@ -66,5 +70,21 @@ export async function simulateDeliveryPricing(business: { lat: number; lng: numb
   } catch (error) {
     console.error("No se pudo calcular la simulación de precio dinámico:", error);
     return null;
+  }
+}
+
+/**
+ * Suma al envío el recargo por mal clima (si el admin lo activó y el clima del local lo amerita). El recargo va
+ * FUERA de los topes mínimo/máximo del envío y se muestra aparte; `fee` ya lo incluye. Nunca lanza: si el clima
+ * no se puede consultar simplemente no se cobra.
+ */
+export async function applyWeatherSurcharge<T extends { fee: number }>(business: { lat: number; lng: number }, quote: T, config: WeatherConfig) {
+  if (config.mode === "off" || !(config.amount > 0)) return { ...quote, weatherFee: 0, weatherCondition: null as WeatherCondition | null };
+  try {
+    const condition = await getWeatherCondition(business.lat, business.lng);
+    const { fee: weatherFee } = weatherSurcharge({ mode: config.mode, amount: config.amount, condition });
+    return { ...quote, fee: Math.round((quote.fee + weatherFee) * 100) / 100, weatherFee, weatherCondition: condition };
+  } catch {
+    return { ...quote, weatherFee: 0, weatherCondition: null as WeatherCondition | null };
   }
 }

@@ -407,6 +407,7 @@ export default function CourierPanel() {
                 className="shrink-0 rounded-xl bg-brand px-4 py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
               >
                 Tomar · {money(order.deliveryFee)}
+                {order.deliveryPricing?.weatherFee ? <span className="block text-[10px] font-bold opacity-90">🌧️ incluye {money(order.deliveryPricing.weatherFee)} por lluvia</span> : null}
               </button>
             </div>
           ))

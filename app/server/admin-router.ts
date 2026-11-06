@@ -8,7 +8,7 @@ import { logOrderEvent } from "./lib/order-events";
 import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
 import { businesses, claims, courierLocations, orderEvents, orders, ratings, users, walletEntries, financeSettings, settlements } from "@db/schema";
 import { buildStatements, hasActivity, periodBounds, type WalletRef } from "@contracts/wallet";
-import { summarizeDynamicSimulation, type SimulationRow } from "@contracts/pricing";
+import { WEATHER_SURCHARGE_MODES, summarizeDynamicSimulation, type SimulationRow } from "@contracts/pricing";
 import { notifyPaymentReview } from "./lib/wallet";
 
 const daysAgo = (n: number) => {
@@ -84,6 +84,8 @@ export const adminRouter = createRouter({
     minDeliveryFee: z.number().min(0).max(100),
     maxDeliveryFee: z.number().min(0).max(100),
     dynamicPricingEnabled: z.boolean(),
+    weatherSurchargeMode: z.enum(WEATHER_SURCHARGE_MODES).optional(),
+    weatherSurcharge: z.number().min(0).max(10).optional(),
     paymentInstructions: z.string().trim().max(1000).nullable().optional(),
   }).refine((v) => v.maxDeliveryFee >= v.minDeliveryFee, { message: "El envío máximo no puede ser menor que el mínimo.", path: ["maxDeliveryFee"] })).mutation(async ({ ctx, input }) => {
     const db = getDb();
