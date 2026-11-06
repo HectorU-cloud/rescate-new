@@ -53,6 +53,7 @@ En producción `APP_SECRET`, `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_
 - GPS de repartidor: consulta `docs/GPS_EN_VIVO.md`.
 - Fotografías, edición de productos y almacenamiento S3/R2: consulta `docs/IMAGENES_Y_EDICION.md`.
 - Notificaciones push web con Firebase Cloud Messaging: consulta `docs/NOTIFICACIONES_PUSH.md`.
+- Combos configurables (sabor, tamaño y extras con precio por local): consulta `docs/OPCIONES_DE_COMBO.md`.
 
 ## Actualizar una base de datos que ya tiene usuarios (correo único)
 

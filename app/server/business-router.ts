@@ -1,9 +1,11 @@
 import { z } from "zod";
 import { randomInt } from "node:crypto";
-import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
+import { attachItemOptions } from "./lib/product-options";
+import { round2 } from "@contracts/options";
 import { getDb } from "./queries/connection";
 import { BUSINESS_RULES } from "@contracts/constants";
 import { MAX_PREP_MINUTES, MIN_PREP_MINUTES } from "@contracts/wallet";
@@ -21,8 +23,11 @@ import { MIN_CANCEL_REASON_LENGTH, businessCancelNeedsReason, businessCancelable
 import { startOfDayEcuador } from "./lib/business-rules";
 import {
   businesses,
+  optionChoices,
+  optionGroups,
   orderItems,
   orders,
+  productOptionGroups,
   products,
   ratings,
   rescuePacks,
@@ -43,6 +48,53 @@ async function requireMyBusiness(userId: number) {
   }
   return biz;
 }
+
+/** Los grupos de opciones solo se pueden usar en productos del mismo local. */
+async function assertGroupsBelongToBusiness(businessId: number, groupIds: number[]) {
+  const unique = [...new Set(groupIds)];
+  if (unique.length === 0) return;
+  const rows = await getDb()
+    .select({ id: optionGroups.id })
+    .from(optionGroups)
+    .where(and(eq(optionGroups.businessId, businessId), inArray(optionGroups.id, unique)));
+  if (rows.length !== unique.length) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Alguno de los grupos de opciones ya no existe" });
+  }
+}
+
+/** Deja exactamente estos grupos de opciones en el producto (en este orden). */
+async function replaceProductOptionGroups(productId: number, groupIds: number[]) {
+  const unique = [...new Set(groupIds)];
+  await getDb().transaction(async (tx) => {
+    await tx.delete(productOptionGroups).where(eq(productOptionGroups.productId, productId));
+    if (unique.length > 0) {
+      await tx.insert(productOptionGroups).values(unique.map((groupId, i) => ({ productId, groupId, sortOrder: i })));
+    }
+  });
+}
+
+const optionGroupInput = z
+  .object({
+    id: z.number().int().positive().optional(),
+    name: z.string().trim().min(2).max(100),
+    // 0 = opcional (extras); 1 o más = el cliente debe elegir (sabor de la cola, tamaño de las papas).
+    minSelect: z.number().int().min(0).max(10),
+    // 1 = elige una sola; más = puede marcar varias.
+    maxSelect: z.number().int().min(1).max(10),
+    choices: z
+      .array(
+        z.object({
+          name: z.string().trim().min(1).max(100),
+          // Lo que se suma al precio del producto con ESTE local (0 = incluida).
+          priceDelta: z.number().min(0).max(100),
+          isAvailable: z.boolean().default(true),
+        }),
+      )
+      .min(1)
+      .max(30),
+  })
+  .refine((v) => v.minSelect <= v.maxSelect, { message: "El mínimo no puede ser mayor que el máximo", path: ["minSelect"] })
+  .refine((v) => v.minSelect <= v.choices.length, { message: "El mínimo no puede ser mayor que la cantidad de opciones", path: ["minSelect"] });
 
 function assertInServiceArea(lat: number, lng: number) {
   if (!isInServiceArea(lat, lng)) {
@@ -286,10 +338,11 @@ export const businessRouter = createRouter({
         ? rows.filter((o) => !["delivered", "cancelled"].includes(o.status))
         : rows;
       const ids = filtered.map((o) => o.id);
-      const items =
+      const items = await attachItemOptions(
         ids.length > 0
           ? await db.select().from(orderItems).where(inArray(orderItems.orderId, ids))
-          : [];
+          : [],
+      );
       const byOrder = new Map<number, typeof items>();
       for (const it of items) {
         const arr = byOrder.get(it.orderId) ?? [];
@@ -409,12 +462,89 @@ export const businessRouter = createRouter({
   // --- Productos ---
   products: authedQuery.query(async ({ ctx }) => {
     const biz = await requireMyBusiness(ctx.user.id);
-    return getDb()
+    const db = getDb();
+    const rows = await db
       .select()
       .from(products)
       .where(eq(products.businessId, biz.id))
       .orderBy(desc(products.createdAt));
+    const links = rows.length > 0
+      ? await db
+          .select()
+          .from(productOptionGroups)
+          .where(inArray(productOptionGroups.productId, rows.map((r) => r.id)))
+          .orderBy(asc(productOptionGroups.sortOrder), asc(productOptionGroups.id))
+      : [];
+    const groupsByProduct = new Map<number, number[]>();
+    for (const l of links) groupsByProduct.set(l.productId, [...(groupsByProduct.get(l.productId) ?? []), l.groupId]);
+    return rows.map((p) => ({ ...p, optionGroupIds: groupsByProduct.get(p.id) ?? [] }));
   }),
+
+  // --- Opciones de producto (combos configurables) ---
+  // Los grupos son del local y se reutilizan en varios productos; cada local pone SUS precios adicionales.
+  optionGroups: authedQuery.query(async ({ ctx }) => {
+    const biz = await requireMyBusiness(ctx.user.id);
+    const db = getDb();
+    const groups = await db
+      .select()
+      .from(optionGroups)
+      .where(eq(optionGroups.businessId, biz.id))
+      .orderBy(asc(optionGroups.sortOrder), asc(optionGroups.id));
+    if (groups.length === 0) return [];
+    const ids = groups.map((g) => g.id);
+    const [choices, links] = await Promise.all([
+      db.select().from(optionChoices).where(inArray(optionChoices.groupId, ids)).orderBy(asc(optionChoices.sortOrder), asc(optionChoices.id)),
+      db.select().from(productOptionGroups).where(inArray(productOptionGroups.groupId, ids)),
+    ]);
+    return groups.map((g) => ({
+      ...g,
+      choices: choices.filter((c) => c.groupId === g.id),
+      productCount: links.filter((l) => l.groupId === g.id).length,
+    }));
+  }),
+
+  upsertOptionGroup: authedQuery.input(optionGroupInput).mutation(async ({ ctx, input }) => {
+    const biz = await requireMyBusiness(ctx.user.id);
+    const db = getDb();
+    if (input.id) {
+      const existing = await db.query.optionGroups.findFirst({
+        where: and(eq(optionGroups.id, input.id), eq(optionGroups.businessId, biz.id)),
+      });
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "No encontramos ese grupo de opciones" });
+    }
+    const id = await db.transaction(async (tx) => {
+      let groupId: number;
+      if (input.id) {
+        groupId = input.id;
+        await tx
+          .update(optionGroups)
+          .set({ name: input.name, minSelect: input.minSelect, maxSelect: input.maxSelect })
+          .where(and(eq(optionGroups.id, groupId), eq(optionGroups.businessId, biz.id)));
+      } else {
+        const [row] = await tx
+          .insert(optionGroups)
+          .values({ businessId: biz.id, name: input.name, minSelect: input.minSelect, maxSelect: input.maxSelect })
+          .$returningId();
+        groupId = row.id;
+      }
+      // Los pedidos ya hechos guardan una copia del nombre y del precio, así que se puede reemplazar sin riesgo.
+      await tx.delete(optionChoices).where(eq(optionChoices.groupId, groupId));
+      await tx.insert(optionChoices).values(
+        input.choices.map((c, i) => ({ groupId, name: c.name, priceDelta: round2(c.priceDelta), isAvailable: c.isAvailable, sortOrder: i })),
+      );
+      return groupId;
+    });
+    return { id };
+  }),
+
+  deleteOptionGroup: authedQuery
+    .input(z.object({ id: z.number().int().positive() }))
+    .mutation(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      // Al borrar el grupo se quitan sus opciones y desaparece de los productos que lo usaban.
+      await getDb().delete(optionGroups).where(and(eq(optionGroups.id, input.id), eq(optionGroups.businessId, biz.id)));
+      return { ok: true };
+    }),
 
   upsertProduct: authedQuery
     .input(
@@ -425,11 +555,14 @@ export const businessRouter = createRouter({
         imageUrl: z.string().max(500_000).optional().nullable(),
         price: z.number().min(0.1).max(500),
         emoji: z.string().max(8).optional(),
+        // Grupos de opciones del producto. Sin este campo no se tocan los que ya tiene; con [] se quitan todos.
+        optionGroupIds: z.array(z.number().int().positive()).max(20).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const biz = await requireMyBusiness(ctx.user.id);
       const db = getDb();
+      if (input.optionGroupIds) await assertGroupsBelongToBusiness(biz.id, input.optionGroupIds);
       const folder = businessImageFolder(biz.id, "product");
       const finalImageUrl = await promoteStagedImageUrl(input.imageUrl, folder);
       const existing = input.id
@@ -451,6 +584,7 @@ export const businessRouter = createRouter({
           );
         // Si cambió o quitó la foto, borra la anterior del almacenamiento
         await releaseReplacedImage(existing?.imageUrl, finalImageUrl ?? null, folder);
+        if (existing && input.optionGroupIds) await replaceProductOptionGroups(input.id, input.optionGroupIds);
         return { id: input.id };
       }
       const [{ id }] = await db
@@ -464,6 +598,7 @@ export const businessRouter = createRouter({
           emoji: input.emoji ?? "🍽️",
         })
         .$returningId();
+      if (input.optionGroupIds && input.optionGroupIds.length > 0) await replaceProductOptionGroups(id, input.optionGroupIds);
       return { id };
     }),
 

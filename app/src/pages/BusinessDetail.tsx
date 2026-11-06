@@ -6,6 +6,8 @@ import { useCart } from "@/hooks/useCart";
 import { CATEGORY_LABELS, money } from "@/lib/format";
 import { toast } from "sonner";
 import { packDayLabel } from "@contracts/packs";
+import { isGroupOrderable } from "@contracts/options";
+import ProductOptionsDialog, { type CustomizableProduct } from "@/components/ProductOptionsDialog";
 
 export default function BusinessDetail() {
   const { id } = useParams<{ id: string }>();
@@ -27,6 +29,8 @@ export default function BusinessDetail() {
   });
 
   const [rescuingPack, setRescuingPack] = useState<number | null>(null);
+  // Producto con opciones (combo) que el cliente está personalizando.
+  const [customizing, setCustomizing] = useState<CustomizableProduct | null>(null);
 
   const cartFromHere = cart?.businessId === businessId;
   const initialTab = searchParams.get("rescate") === "1" ? "rescate" : "menu";
@@ -146,6 +150,9 @@ export default function BusinessDetail() {
             const productDescription = ingredients
               ? description.slice(0, ingredientMatch!.index).replace(/[·|,;\s]+$/, "").trim()
               : description;
+            const hasOptions = p.optionGroups.length > 0;
+            // Un grupo obligatorio sin opciones disponibles (p. ej. todas las colas agotadas) impide pedir el combo.
+            const orderable = p.optionGroups.every(isGroupOrderable);
             return (
             <article
               key={p.id}
@@ -175,10 +182,16 @@ export default function BusinessDetail() {
                   </p>
                 )}
                 <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/70 pt-3">
-                  <span className="text-[11px] font-semibold text-muted-foreground">Precio por unidad</span>
+                  <span className="text-[11px] font-semibold text-muted-foreground">
+                    {hasOptions ? (orderable ? "🧩 Personalizable: elige sabor, tamaño y extras" : "No disponible por ahora") : "Precio por unidad"}
+                  </span>
               <button
-                disabled={!business.openNow}
+                disabled={!business.openNow || !orderable}
                 onClick={() => {
+                  if (hasOptions) {
+                    setCustomizing(p);
+                    return;
+                  }
                   add(
                     {
                       id: business.id,
@@ -281,6 +294,19 @@ export default function BusinessDetail() {
           })}
         </section>
       )}
+
+      <ProductOptionsDialog
+        product={customizing}
+        onClose={() => setCustomizing(null)}
+        onAdd={(product, options, unitPrice) => {
+          add(
+            { id: business.id, name: business.name, deliveryFee: business.deliveryFee },
+            { productId: product.id, name: product.name, price: unitPrice, emoji: product.emoji, options },
+          );
+          toast.success(`${product.name} agregado`);
+          setCustomizing(null);
+        }}
+      />
     </div>
   );
 }

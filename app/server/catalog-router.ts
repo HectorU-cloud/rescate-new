@@ -7,6 +7,7 @@ import { isBusinessOpenNow, isBusinessPublic, isPackReservable } from "./lib/bus
 import { isPackExpired } from "@contracts/packs";
 import { loadBusinessesByIds } from "./lib/business-queries";
 import { toPublicBusiness } from "./lib/public-business";
+import { loadOptionGroupsByProduct } from "./lib/product-options";
 
 // Reservable = no venció (fecha) y estamos dentro de su ventana horaria diaria.
 const withReservable = <T extends { pickupStart: string; pickupEnd: string; expiresAt: Date | null }>(p: T) => ({
@@ -76,7 +77,10 @@ export const catalogRouter = createRouter({
             gt(rescuePacks.expiresAt, new Date()), // los vencidos (o sin fecha) no se muestran
           ),
         );
-      return { business: withOpenNow(toPublicBusiness(business)), products: prods, rescuePacks: packs.map(withReservable) };
+      // Cada producto trae sus grupos de opciones (sabor, tamaño, extras…); vacío si es un producto simple.
+      const optionsByProduct = await loadOptionGroupsByProduct(prods.map((p) => p.id));
+      const productsWithOptions = prods.map((p) => ({ ...p, optionGroups: optionsByProduct.get(p.id) ?? [] }));
+      return { business: withOpenNow(toPublicBusiness(business)), products: productsWithOptions, rescuePacks: packs.map(withReservable) };
     }),
 
   // Todos los packs de rescate activos (sección "Rescate")

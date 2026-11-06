@@ -11,6 +11,7 @@ import { ClaimBox } from "@/components/ClaimBox";
 import { RatingBox } from "@/components/RatingBox";
 import { CodeNotice } from "@/components/CodeNotice";
 import { money, timeAgo } from "@/lib/format";
+import { describeOptions, resolveOptionSelection, round2 } from "@contracts/options";
 import { DELIVERY_FLOW, MILAGRO, ORDER_STATUS_LABELS, RESCUE_FLOW, type OrderStatusKey } from "@contracts/constants";
 import { toast } from "sonner";
 
@@ -123,17 +124,34 @@ export default function OrderDetail() {
       );
       const repeatable = items.flatMap((item) => {
         const product = item.productId == null ? undefined : available.get(item.productId);
-        return product ? [{ product, quantity: item.quantity }] : [];
+        if (!product) return [];
+        // Combos: se vuelven a buscar las mismas opciones (por nombre) en el menú de hoy, con sus precios de hoy.
+        // Si alguna ya no existe, está agotada o dejó de cumplir las reglas del grupo, ese ítem se omite.
+        const resolved = resolveOptionSelection(
+          product.optionGroups,
+          item.options.flatMap((saved) => {
+            const group = product.optionGroups.find((g) => g.name === saved.groupName);
+            const choice = group?.choices.find((c) => c.name === saved.choiceName);
+            return choice ? [choice.id] : [-1];
+          }),
+        );
+        if (!resolved.ok) return [];
+        return [{
+          product,
+          quantity: item.quantity,
+          options: resolved.options.map((o) => ({ choiceId: o.choiceId, groupName: o.groupName, choiceName: o.choiceName, priceDelta: o.priceDelta })),
+          unitPrice: round2(product.price + resolved.extra),
+        }];
       });
       if (repeatable.length === 0) {
         toast.error("Ningún producto de este pedido sigue disponible.");
         return;
       }
-      repeatable.forEach(({ product, quantity }) => {
+      repeatable.forEach(({ product, quantity, options, unitPrice }) => {
         for (let count = 0; count < Math.min(quantity, 50); count += 1) {
           add(
             { id: catalog.business.id, name: catalog.business.name, deliveryFee: catalog.business.deliveryFee },
-            { productId: product.id, name: product.name, price: product.price, emoji: product.emoji },
+            { productId: product.id, name: product.name, price: unitPrice, emoji: product.emoji, options },
           );
         }
       });
@@ -324,11 +342,14 @@ export default function OrderDetail() {
         <h2 className="font-display mb-3 text-base font-extrabold">Detalle</h2>
         <ul className="space-y-2 text-sm">
           {items.map((it) => (
-            <li key={it.id} className="flex justify-between font-semibold">
+            <li key={it.id} className="flex justify-between gap-3 font-semibold">
               <span>
                 {it.quantity} × {it.name}
+                {it.options.length > 0 && (
+                  <span className="block text-xs font-medium text-muted-foreground">{describeOptions(it.options, money)}</span>
+                )}
               </span>
-              <span>{money(it.unitPrice * it.quantity)}</span>
+              <span className="shrink-0">{money(it.unitPrice * it.quantity)}</span>
             </li>
           ))}
           {order.deliveryFee > 0 && (

@@ -5,6 +5,7 @@ import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { money } from "@/lib/format";
+import { describeOptions } from "@contracts/options";
 import { MOBILE_HINT, normalizeEcuadorMobile } from "@contracts/phone";
 import { toast } from "sonner";
 
@@ -124,7 +125,7 @@ export default function Cart() {
     }
     createOrder.mutate({
       businessId: cart!.businessId,
-      items: cart!.items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+      items: cart!.items.map((i) => ({ productId: i.productId, quantity: i.quantity, options: i.options.map((o) => o.choiceId) })),
       fulfillmentMethod,
       ...(isDelivery ? { deliveryAddress: address.trim(), deliveryLat: deliveryCoords!.lat, deliveryLng: deliveryCoords!.lng } : {}),
       notes: notes.trim() || undefined,
@@ -168,12 +169,15 @@ export default function Cart() {
         </div>
         <ul className="space-y-3">
           {cart.items.map((i) => (
-            <li key={i.productId} className="flex items-center gap-3 rounded-2xl border border-border/70 p-3">
+            <li key={i.lineKey} className="flex items-center gap-3 rounded-2xl border border-border/70 p-3">
               <span className="grid h-11 w-11 place-items-center rounded-xl bg-secondary text-2xl">
                 {i.emoji}
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-extrabold">{i.name}</p>
+                {i.options.length > 0 && (
+                  <p className="text-[11px] font-semibold leading-snug text-foreground/70">{describeOptions(i.options, money)}</p>
+                )}
                 <p className="text-xs font-bold text-muted-foreground">
                   {money(i.price)} c/u
                 </p>
@@ -181,7 +185,7 @@ export default function Cart() {
               <div className="flex items-center gap-1 rounded-full bg-secondary p-1">
                 <button
                   aria-label={`Disminuir cantidad de ${i.name}`}
-                  onClick={() => setQty(i.productId, i.quantity - 1)}
+                  onClick={() => setQty(i.lineKey, i.quantity - 1)}
                   className="grid h-8 w-8 place-items-center rounded-full bg-card font-extrabold shadow-sm"
                 >
                   −
@@ -191,7 +195,7 @@ export default function Cart() {
                 </span>
                 <button
                   aria-label={`Aumentar cantidad de ${i.name}`}
-                  onClick={() => setQty(i.productId, i.quantity + 1)}
+                  onClick={() => setQty(i.lineKey, i.quantity + 1)}
                   className="grid h-8 w-8 place-items-center rounded-full bg-card font-extrabold shadow-sm"
                 >
                   +
@@ -199,7 +203,7 @@ export default function Cart() {
               </div>
               <div className="w-20 text-right">
                 <span className="block font-display text-sm font-extrabold">{money(i.price * i.quantity)}</span>
-                <button type="button" onClick={() => remove(i.productId)} className="mt-1 text-[10px] font-bold text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-destructive">Quitar</button>
+                <button type="button" onClick={() => remove(i.lineKey)} className="mt-1 text-[10px] font-bold text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-destructive">Quitar</button>
               </div>
             </li>
           ))}

@@ -163,6 +163,60 @@ export const products = mysqlTable(
 export type Product = typeof products.$inferSelect;
 
 // ---------------------------------------------------------------------------
+// Opciones de producto (combos configurables)
+// Cada local define sus propios grupos de opciones (p. ej. "Tamaño de papas", "Sabor de la cola", "Extras")
+// con SU precio adicional, y los reutiliza en los productos que quiera.
+// ---------------------------------------------------------------------------
+export const optionGroups = mysqlTable(
+  "option_groups",
+  {
+    id: serial("id").primaryKey(),
+    businessId: bigint("businessId", { mode: "number", unsigned: true }).references(() => businesses.id, { onDelete: "cascade" }).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    // minSelect >= 1: el cliente DEBE elegir (p. ej. sabor de la cola). minSelect = 0: es opcional (extras).
+    minSelect: int("minSelect").default(0).notNull(),
+    // maxSelect = 1: elige una sola opción; mayor: puede marcar varias (extras).
+    maxSelect: int("maxSelect").default(1).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({ bizIdx: index("optgrp_biz_idx").on(t.businessId) }),
+);
+
+export type OptionGroup = typeof optionGroups.$inferSelect;
+
+export const optionChoices = mysqlTable(
+  "option_choices",
+  {
+    id: serial("id").primaryKey(),
+    groupId: bigint("groupId", { mode: "number", unsigned: true }).references(() => optionGroups.id, { onDelete: "cascade" }).notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    // Valor que se suma al precio del producto al elegir esta opción (0 = incluida).
+    priceDelta: double("priceDelta").default(0).notNull(),
+    isAvailable: boolean("isAvailable").default(true).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+  },
+  (t) => ({ groupIdx: index("optchoice_group_idx").on(t.groupId) }),
+);
+
+export type OptionChoice = typeof optionChoices.$inferSelect;
+
+// Qué grupos de opciones tiene cada producto.
+export const productOptionGroups = mysqlTable(
+  "product_option_groups",
+  {
+    id: serial("id").primaryKey(),
+    productId: bigint("productId", { mode: "number", unsigned: true }).references(() => products.id, { onDelete: "cascade" }).notNull(),
+    groupId: bigint("groupId", { mode: "number", unsigned: true }).references(() => optionGroups.id, { onDelete: "cascade" }).notNull(),
+    sortOrder: int("sortOrder").default(0).notNull(),
+  },
+  (t) => ({
+    productGroupUnique: uniqueIndex("prodoptgrp_unique").on(t.productId, t.groupId),
+    groupIdx: index("prodoptgrp_group_idx").on(t.groupId),
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // Packs de rescate (comida con descuento al final del día) — el diferenciador
 // ---------------------------------------------------------------------------
 export const rescuePacks = mysqlTable(
@@ -297,6 +351,22 @@ export const orderItems = mysqlTable(
 );
 
 export type OrderItem = typeof orderItems.$inferSelect;
+
+// Lo que el cliente eligió en cada ítem (copia del nombre y del precio al momento de pedir: no depende
+// de que el local cambie o borre la opción después). `unitPrice` del ítem YA incluye estos adicionales.
+export const orderItemOptions = mysqlTable(
+  "order_item_options",
+  {
+    id: serial("id").primaryKey(),
+    orderItemId: bigint("orderItemId", { mode: "number", unsigned: true }).references(() => orderItems.id, { onDelete: "cascade" }).notNull(),
+    groupName: varchar("groupName", { length: 100 }).notNull(),
+    choiceName: varchar("choiceName", { length: 100 }).notNull(),
+    priceDelta: double("priceDelta").default(0).notNull(),
+  },
+  (t) => ({ itemIdx: index("itemopt_item_idx").on(t.orderItemId) }),
+);
+
+export type OrderItemOption = typeof orderItemOptions.$inferSelect;
 
 
 // Última ubicación conocida del repartidor por pedido activo.

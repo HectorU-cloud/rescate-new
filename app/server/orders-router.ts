@@ -5,6 +5,8 @@ import { randomInt } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery, publicQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
+import { loadOptionGroupsByProduct, attachItemOptions } from "./lib/product-options";
+import { resolveOptionSelection, round2, type ResolvedOption } from "@contracts/options";
 import { assertCustomerCanOrder } from "./lib/order-limits";
 import { loadBusinessesByIds } from "./lib/business-queries";
 import { toPublicBusiness } from "./lib/public-business";
@@ -24,6 +26,7 @@ import {
   businesses,
   claims,
   courierLocations,
+  orderItemOptions,
   orderItems,
   orders,
   products,
@@ -57,10 +60,12 @@ async function loadOrderWithRelations(orderId: number) {
     where: eq(orders.id, orderId),
   });
   if (!order) return null;
-  const items = await db
-    .select()
-    .from(orderItems)
-    .where(eq(orderItems.orderId, orderId));
+  const items = await attachItemOptions(
+    await db
+      .select()
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId)),
+  );
   const business = await db.query.businesses.findFirst({
     where: eq(businesses.id, order.businessId),
   });
@@ -79,6 +84,9 @@ export const ordersRouter = createRouter({
             z.object({
               productId: z.number().int().positive(),
               quantity: z.number().int().min(1).max(50),
+              // Ids de las opciones elegidas (sabor de la cola, tamaño de las papas, extras…). El servidor las valida y
+              // recalcula el precio: el cliente no puede fijarlo.
+              options: z.array(z.number().int().positive()).max(30).default([]),
             }),
           )
           .min(1)
@@ -122,15 +130,23 @@ export const ordersRouter = createRouter({
       );
       const byId = new Map(prods.map((p) => [p.id, p]));
 
+      const optionGroupsByProduct = await loadOptionGroupsByProduct([...new Set(prodIds)]);
+
       let subtotal = 0;
-      const itemRows: { productId: number; name: string; unitPrice: number; quantity: number }[] = [];
+      const itemRows: { productId: number; name: string; unitPrice: number; quantity: number; options: ResolvedOption[] }[] = [];
       for (const it of input.items) {
         const p = byId.get(it.productId);
         if (!p || !p.isAvailable || !prodIds.includes(p.id)) {
           throw new TRPCError({ code: "BAD_REQUEST", message: `Producto no disponible` });
         }
-        subtotal += p.price * it.quantity;
-        itemRows.push({ productId: p.id, name: p.name, unitPrice: p.price, quantity: it.quantity });
+        // Opciones del combo: se validan contra lo que el local configuró y se suma SU precio adicional.
+        const resolved = resolveOptionSelection(optionGroupsByProduct.get(p.id) ?? [], it.options);
+        if (!resolved.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: `${p.name}: ${resolved.message}` });
+        }
+        const unitPrice = round2(p.price + resolved.extra);
+        subtotal += unitPrice * it.quantity;
+        itemRows.push({ productId: p.id, name: p.name, unitPrice, quantity: it.quantity, options: resolved.options });
       }
       if (subtotal < business.minOrder) {
         throw new TRPCError({ code: "BAD_REQUEST", message: `El pedido mínimo de este local es $${business.minOrder.toFixed(2)}.` });
@@ -174,9 +190,15 @@ export const ordersRouter = createRouter({
             customerPhone: resolveCustomerPhone(input.customerPhone, ctx.user.phone),
           })
           .$returningId();
-        await tx.insert(orderItems).values(
-          itemRows.map((r) => ({ ...r, orderId: id })),
-        );
+        // Uno por uno: necesitamos el id de cada ítem para guardar sus opciones.
+        for (const { options, ...row } of itemRows) {
+          const [{ id: itemId }] = await tx.insert(orderItems).values({ ...row, orderId: id }).$returningId();
+          if (options.length > 0) {
+            await tx.insert(orderItemOptions).values(
+              options.map((o) => ({ orderItemId: itemId, groupName: o.groupName, choiceName: o.choiceName, priceDelta: o.priceDelta })),
+            );
+          }
+        }
         return id;
       });
 

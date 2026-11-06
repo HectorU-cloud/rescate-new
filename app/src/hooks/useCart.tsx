@@ -7,14 +7,30 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { optionLineKey } from "@contracts/options";
+
+/** Opción que el cliente eligió en un combo (sabor de la cola, tamaño de las papas, extra…). */
+export type CartOption = {
+  choiceId: number;
+  groupName: string;
+  choiceName: string;
+  priceDelta: number;
+};
 
 export type CartItem = {
+  /** Identifica la línea: el mismo producto con opciones distintas son líneas distintas. */
+  lineKey: string;
   productId: number;
   name: string;
+  /** Precio unitario YA con los adicionales de las opciones elegidas (el servidor lo vuelve a calcular). */
   price: number;
   emoji: string;
   quantity: number;
+  options: CartOption[];
 };
+
+/** Lo que se pasa a `add`: la línea la arma el carrito. */
+export type CartItemInput = Omit<CartItem, "quantity" | "lineKey" | "options"> & { options?: CartOption[] };
 
 export type CartState = {
   businessId: number;
@@ -29,10 +45,10 @@ type CartContextValue = {
   subtotal: number;
   add: (
     business: { id: number; name: string; deliveryFee: number },
-    item: Omit<CartItem, "quantity">,
+    item: CartItemInput,
   ) => void;
-  remove: (productId: number) => void;
-  setQty: (productId: number, quantity: number) => void;
+  remove: (lineKey: string) => void;
+  setQty: (lineKey: string, quantity: number) => void;
   clear: () => void;
 };
 
@@ -43,7 +59,13 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const [cart, setCart] = useState<CartState | null>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? (JSON.parse(raw) as CartState) : null;
+      if (!raw) return null;
+      const saved = JSON.parse(raw) as CartState;
+      // Carritos guardados antes de las opciones de combo no traen lineKey ni options.
+      return {
+        ...saved,
+        items: saved.items.map((i) => ({ ...i, options: i.options ?? [], lineKey: i.lineKey ?? String(i.productId) })),
+      };
     } catch {
       return null;
     }
@@ -61,8 +83,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const add = useCallback(
     (
       business: { id: number; name: string; deliveryFee: number },
-      item: Omit<CartItem, "quantity">,
+      item: CartItemInput,
     ) => {
+      const options = item.options ?? [];
+      const lineKey = optionLineKey(item.productId, options.map((o) => o.choiceId));
       setCart((prev) => {
         // Como las apps reales: un solo comercio por pedido
         const base: CartState =
@@ -74,39 +98,39 @@ export function CartProvider({ children }: { children: ReactNode }) {
                 deliveryFee: business.deliveryFee,
                 items: [],
               };
-        const existing = base.items.find((i) => i.productId === item.productId);
+        const existing = base.items.find((i) => i.lineKey === lineKey);
         const items = existing
           ? base.items.map((i) =>
-              i.productId === item.productId
+              i.lineKey === lineKey
                 ? { ...i, quantity: i.quantity + 1 }
                 : i,
             )
-          : [...base.items, { ...item, quantity: 1 }];
+          : [...base.items, { ...item, options, lineKey, quantity: 1 }];
         return { ...base, items };
       });
     },
     [],
   );
 
-  const remove = useCallback((productId: number) => {
+  const remove = useCallback((lineKey: string) => {
     setCart((prev) => {
       if (!prev) return prev;
-      const items = prev.items.filter((i) => i.productId !== productId);
+      const items = prev.items.filter((i) => i.lineKey !== lineKey);
       return items.length ? { ...prev, items } : null;
     });
   }, []);
 
-  const setQty = useCallback((productId: number, quantity: number) => {
+  const setQty = useCallback((lineKey: string, quantity: number) => {
     setCart((prev) => {
       if (!prev) return prev;
       if (quantity <= 0) {
-        const items = prev.items.filter((i) => i.productId !== productId);
+        const items = prev.items.filter((i) => i.lineKey !== lineKey);
         return items.length ? { ...prev, items } : null;
       }
       return {
         ...prev,
         items: prev.items.map((i) =>
-          i.productId === productId ? { ...i, quantity } : i,
+          i.lineKey === lineKey ? { ...i, quantity } : i,
         ),
       };
     });

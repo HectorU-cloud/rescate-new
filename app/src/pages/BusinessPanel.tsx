@@ -16,6 +16,8 @@ import { computePackExpiry, describePackExpiry } from "@contracts/packs";
 import { compressProductImage, uploadCompressedImage } from "@/lib/product-image";
 import BusinessImageField from "@/components/BusinessImageField";
 import { PHONE_HINT, normalizeEcuadorPhone } from "@contracts/phone";
+import { describeOptions } from "@contracts/options";
+import OptionGroupsManager from "@/components/OptionGroupsManager";
 import {
   BUSINESS_CATEGORIES,
   BUSINESS_RULES,
@@ -717,6 +719,9 @@ function OrdersTab({ businessId }: { businessId: number }) {
               {items.map((i) => (
                 <li key={i.id}>
                   {i.quantity} × {i.name}
+                  {i.options.length > 0 && (
+                    <span className="block pl-4 font-bold text-foreground/80">↳ {describeOptions(i.options, money)}</span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -861,7 +866,8 @@ function MenuTab() {
   const utils = trpc.useUtils();
   const list = trpc.business.products.useQuery();
   const createImageUpload = trpc.business.createImageUpload.useMutation();
-  const emptyForm = { name: "", price: "", emoji: "🍽️", description: "", imageUrl: "" };
+  const optionGroups = trpc.business.optionGroups.useQuery();
+  const emptyForm = { name: "", price: "", emoji: "🍽️", description: "", imageUrl: "", optionGroupIds: [] as number[] };
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [imageBusy, setImageBusy] = useState(false);
@@ -871,6 +877,7 @@ function MenuTab() {
       const wasEditing = editingId !== null;
       setEditingId(null);
       utils.business.products.invalidate();
+      utils.business.optionGroups.invalidate();
       utils.catalog.invalidate();
       toast.success(wasEditing ? "Producto actualizado" : "Producto agregado al menú");
     },
@@ -923,6 +930,34 @@ function MenuTab() {
           className="w-full resize-y rounded-xl border border-input bg-background px-3 py-2.5 text-sm outline-none"
         />
         <div className="space-y-2 rounded-2xl border border-dashed border-input p-3">
+          <label className="block text-sm font-bold">Opciones del producto (combo)</label>
+          {(optionGroups.data ?? []).length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Para que el cliente pueda elegir sabor, tamaño o extras, primero crea un grupo en «Opciones de combos» (más abajo) y luego márcalo aquí.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {(optionGroups.data ?? []).map((g) => (
+                <label key={g.id} className="flex items-center gap-2 text-sm font-semibold">
+                  <input
+                    type="checkbox"
+                    checked={form.optionGroupIds.includes(g.id)}
+                    onChange={(e) => setForm((f) => ({
+                      ...f,
+                      optionGroupIds: e.target.checked ? [...f.optionGroupIds, g.id] : f.optionGroupIds.filter((id) => id !== g.id),
+                    }))}
+                    className="h-4 w-4 accent-brand"
+                  />
+                  <span>{g.name}</span>
+                  <span className="text-xs font-bold text-muted-foreground">
+                    {g.minSelect > 0 ? "obligatorio" : "opcional"} · {g.choices.length} opcion{g.choices.length === 1 ? "" : "es"}
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="space-y-2 rounded-2xl border border-dashed border-input p-3">
           <label className="block text-sm font-bold">Foto del plato (opcional)</label>
           <input
             type="file"
@@ -964,6 +999,7 @@ function MenuTab() {
             emoji: form.emoji,
             description: form.description.trim() || undefined,
             imageUrl: form.imageUrl || undefined,
+            optionGroupIds: form.optionGroupIds,
           })}
           className="w-full rounded-xl bg-foreground py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
         >
@@ -973,6 +1009,8 @@ function MenuTab() {
           <button type="button" onClick={() => { setEditingId(null); setForm(emptyForm); }} className="w-full rounded-xl border border-input py-2 text-sm font-bold">Cancelar edición</button>
         )}
       </div>
+
+      <OptionGroupsManager />
 
       {(list.data ?? []).map((p) => (
         <div key={p.id} className="flex items-center gap-3 rounded-2xl bg-card p-3 ring-1 ring-border">
@@ -985,11 +1023,14 @@ function MenuTab() {
             <p className="truncate text-sm font-extrabold">{p.name}</p>
             <p className="text-xs font-bold text-muted-foreground">{money(p.price)}</p>
             {p.description && <p className="line-clamp-2 text-xs text-muted-foreground">{p.description}</p>}
+            {p.optionGroupIds.length > 0 && (
+              <p className="text-[11px] font-extrabold text-brand-dark">🧩 Combo con {p.optionGroupIds.length} grupo{p.optionGroupIds.length === 1 ? "" : "s"} de opciones</p>
+            )}
           </div>
           <button
             onClick={() => {
               setEditingId(p.id);
-              setForm({ name: p.name, price: String(p.price), emoji: p.emoji, description: p.description ?? "", imageUrl: p.imageUrl ?? "" });
+              setForm({ name: p.name, price: String(p.price), emoji: p.emoji, description: p.description ?? "", imageUrl: p.imageUrl ?? "", optionGroupIds: p.optionGroupIds });
               window.scrollTo({ top: 0, behavior: "smooth" });
             }}
             className="shrink-0 rounded-full border border-input px-3 py-1.5 text-[11px] font-extrabold"
