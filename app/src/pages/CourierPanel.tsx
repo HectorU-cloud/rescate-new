@@ -1,5 +1,5 @@
 import { useDialogs } from "@/providers/dialogs";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
@@ -10,6 +10,8 @@ import { ChatBox } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 import { StaticMap } from "@/components/StaticMap";
 import WalletCard from "@/components/WalletCard";
+import CityChip from "@/components/CityChip";
+import { useCourierCity } from "@/hooks/useCourierCity";
 import { addDismissed, dismissedKey, parseDismissed, pruneDismissed } from "@/lib/dismissed-orders";
 
 const isLocked = (attempts: number) => attempts >= BUSINESS_RULES.maxCodeAttempts;
@@ -25,6 +27,28 @@ export default function CourierPanel() {
   // Última posición GPS propia (se actualiza junto con el envío al servidor) para dibujar el mapa de la entrega.
   const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
   const enabled = isAuthenticated && user?.appRole === "courier";
+  // Ciudad donde trabaja: decide qué pedidos ve y a qué avisos push le llegan (se guarda en el servidor).
+  const courierCity = useCourierCity(enabled);
+  const workCity = courierCity.city;
+  const detectWorkCity = courierCity.detect;
+  const autoDetected = useRef(false);
+  // Si ya había dado permiso de ubicación, al abrir el panel se actualiza solo la ciudad (p. ej. si viajó a otra).
+  // Nunca se lanza el permiso por su cuenta: si no estaba concedido, usa el botón de ciudad.
+  useEffect(() => {
+    if (!enabled || !workCity || autoDetected.current) return;
+    autoDetected.current = true;
+    const before = workCity.id;
+    void (async () => {
+      try {
+        const status = await navigator.permissions?.query({ name: "geolocation" });
+        if (status?.state !== "granted") return;
+      } catch {
+        return;
+      }
+      const result = await detectWorkCity();
+      if (result.status === "ok" && result.city.id !== before) toast.info(`Ahora estás en ${result.city.name}: verás los pedidos de esa ciudad.`);
+    })();
+  }, [enabled, workCity, detectWorkCity]);
   const available = trpc.courier.available.useQuery(undefined, {
     enabled,
     refetchInterval: 10_000,
@@ -166,6 +190,9 @@ export default function CourierPanel() {
       </section>
 
       <WalletCard />
+
+      {/* Ciudad de trabajo */}
+      <CityChip mode="work" tone="light" controller={courierCity} />
 
       {/* Disponibilidad para recibir avisos */}
       <button
@@ -367,12 +394,14 @@ export default function CourierPanel() {
         </h2>
         {boardOrders.length === 0 ? (
           <div className="rounded-3xl bg-card p-8 text-center ring-1 ring-border">
-            <p className="text-4xl">☕</p>
+            <p className="text-4xl">{workCity ? "☕" : "📍"}</p>
             <p className="font-display mt-2 font-extrabold">
-              Nada por ahora, descansa
+              {workCity ? "Nada por ahora, descansa" : "Elige tu ciudad de trabajo"}
             </p>
             <p className="text-sm text-muted-foreground">
-              Los pedidos listos en los locales aparecerán aquí
+              {workCity
+                ? `Los pedidos listos en los locales de ${workCity.name} aparecerán aquí`
+                : "Toca el botón de ciudad (arriba) para ver los pedidos y recibir avisos."}
             </p>
           </div>
         ) : (

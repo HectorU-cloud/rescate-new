@@ -41,6 +41,9 @@ export const users = mysqlTable("users", {
   courierReviewNote: varchar("courierReviewNote", { length: 300 }),
   // El repartidor decide si quiere recibir avisos de pedidos nuevos
   courierAvailable: boolean("courierAvailable").default(true).notNull(),
+  // Ciudad donde el repartidor trabaja ahora (id de contracts/cities). Solo ve —y recibe avisos de— pedidos de esa
+  // ciudad. Null = aún no la eligió: no ve pedidos hasta elegirla. Es solo un id de ciudad, nunca coordenadas.
+  courierCityId: varchar("courierCityId", { length: 40 }),
   // Calificación del repartidor (null hasta su primera calificación)
   courierRating: double("courierRating"),
   courierRatingCount: int("courierRatingCount").default(0).notNull(),

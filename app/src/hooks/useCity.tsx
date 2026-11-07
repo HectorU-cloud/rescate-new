@@ -10,7 +10,7 @@ export type DetectOutcome =
   | { status: "outside"; nearest: City; distanceKm: number }
   | { status: GeoFailure };
 
-type CityContextValue = {
+export type CityController = {
   /** La ciudad elegida, o null si se eligió "todas" o todavía no se eligió. */
   city: City | null;
   /** ¿La persona ya decidió (elegir una ciudad, "todas" o saltar la pregunta)? Si no, hay que preguntarle. */
@@ -22,7 +22,7 @@ type CityContextValue = {
   detect: () => Promise<DetectOutcome>;
 };
 
-const CityContext = createContext<CityContextValue | null>(null);
+const CityContext = createContext<CityController | null>(null);
 
 function readStored(): CityChoice | null {
   try {
@@ -67,14 +67,14 @@ export function CityProvider({ children }: { children: ReactNode }) {
     }
   }, [setCity]);
 
-  const value = useMemo<CityContextValue>(
+  const value = useMemo<CityController>(
     () => ({ city: cityById(choice?.cityId), hasChosen: choice !== null, source: choice?.source ?? null, setCity, detect }),
     [choice, setCity, detect],
   );
   return <CityContext.Provider value={value}>{children}</CityContext.Provider>;
 }
 
-export function useCity(): CityContextValue {
+export function useCity(): CityController {
   const ctx = useContext(CityContext);
   if (!ctx) throw new Error("useCity debe usarse dentro de <CityProvider>");
   return ctx;

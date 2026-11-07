@@ -2,7 +2,7 @@
 //
 // Para AGREGAR una ciudad basta con añadir una línea a CITIES: no hay nada más que tocar (ni base de datos).
 // Las coordenadas son el centro aproximado de la ciudad (compruébalas en Google Maps antes de abrir una ciudad nueva).
-import { distanceMeters } from "./geo";
+import { distanceMeters } from "./distance";
 
 export type City = {
   /** Identificador estable (minúsculas, sin espacios). Es lo que se guarda en el dispositivo y viaja en las consultas. */
@@ -20,6 +20,7 @@ export const CITIES: readonly City[] = [
   { id: "naranjito", name: "Naranjito", lat: -2.175, lng: -79.4667, radiusKm: 7 },
   { id: "duran", name: "Durán", lat: -2.1733, lng: -79.8353, radiusKm: 8 },
   { id: "guayaquil", name: "Guayaquil", lat: -2.1894, lng: -79.8891, radiusKm: 14 },
+  { id: "babahoyo", name: "Babahoyo", lat: -1.8022, lng: -79.5344, radiusKm: 10 },
 ];
 
 export const cityById = (id: string | null | undefined): City | null => (id ? CITIES.find((c) => c.id === id) ?? null : null);

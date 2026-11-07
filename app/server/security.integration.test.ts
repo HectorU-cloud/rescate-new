@@ -47,7 +47,7 @@ describe.skipIf(!enabled)("seguridad y ubicación (MySQL real)", () => {
   async function mkUser(kind: "customer" | "business" | "courier") {
     const [{ id }] = await db
       .insert(S.users)
-      .values({ unionId: `${tag}-u${seq++}`, name: `${tag} ${kind}`, appRole: kind, courierApproved: kind === "courier" })
+      .values({ unionId: `${tag}-u${seq++}`, name: `${tag} ${kind}`, appRole: kind, courierApproved: kind === "courier", courierCityId: kind === "courier" ? "milagro" : null })
       .$returningId();
     created.users.push(id);
     const [user] = await db.select().from(S.users).where(eq(S.users.id, id));

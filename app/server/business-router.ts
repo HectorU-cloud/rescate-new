@@ -100,7 +100,7 @@ function assertInServiceArea(lat: number, lng: number) {
   if (!isInServiceArea(lat, lng)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `La ubicación está fuera de la zona de servicio (${BUSINESS_RULES.serviceAreaRadiusKm} km alrededor de Milagro). Revisa el pin en el mapa.`,
+      message: `La ubicación está fuera de la zona de servicio (las ciudades donde operamos). Revisa el pin en el mapa.`,
     });
   }
 }

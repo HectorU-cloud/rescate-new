@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { BUSINESS_RULES, MILAGRO } from "@contracts/constants";
+import { MILAGRO } from "@contracts/constants";
 import { isInServiceArea } from "@contracts/geo";
 import { addBaseLayer } from "@/lib/map-tiles";
 import { useCity } from "@/hooks/useCity";
@@ -131,7 +131,7 @@ export function LocationPicker({ value, onChange, className }: Props) {
       {value ? (
         <p className={`text-xs font-bold ${outside ? "text-destructive" : "text-brand-dark"}`}>
           {outside
-            ? `⚠️ Ese punto está fuera de la zona de servicio (${BUSINESS_RULES.serviceAreaRadiusKm} km alrededor de Milagro).`
+            ? `⚠️ Ese punto está fuera de la zona de servicio (las ciudades donde operamos).`
             : `✅ Ubicación marcada (${value.lat.toFixed(5)}, ${value.lng.toFixed(5)}). Arrastra el pin si hay que afinarla.`}
         </p>
       ) : (

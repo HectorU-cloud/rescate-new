@@ -88,7 +88,7 @@ function validateSetup(form: SetupForm, loc: Point | null): Partial<Record<keyof
   if (!TIME_RE.test(form.opensAt)) errors.opensAt = "Elige la hora de apertura.";
   if (!TIME_RE.test(form.closesAt)) errors.closesAt = "Elige la hora de cierre.";
   if (!loc) errors.location = "Marca la ubicación de tu local en el mapa.";
-  else if (!isInServiceArea(loc.lat, loc.lng)) errors.location = "La ubicación debe estar dentro de la zona de servicio (Milagro).";
+  else if (!isInServiceArea(loc.lat, loc.lng)) errors.location = "La ubicación debe estar dentro de la zona de servicio (las ciudades donde operamos).";
   return errors;
 }
 

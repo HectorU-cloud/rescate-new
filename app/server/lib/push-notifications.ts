@@ -4,6 +4,7 @@ import { getDb } from "../queries/connection";
 import { businesses, orders, pushTokens, users } from "@db/schema";
 import { chatPreview, type ChatRole } from "./chat-rules";
 import { recordNotification } from "./notifications";
+import { cityIdForPoint } from "@contracts/cities";
 
 const FIREBASE_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 type ServiceAccount = { project_id: string; client_email: string; private_key: string; token_uri?: string };
@@ -124,12 +125,16 @@ export async function sendPushToUsers(userIds: number[], notification: { title: 
   return { recipients: unique.length, sent };
 }
 
-/** IDs de repartidores aprobados que están disponibles para recibir pedidos. */
-export async function availableCourierIds() {
+/**
+ * IDs de repartidores aprobados que están disponibles para recibir pedidos.
+ * Con `cityId`, solo los que trabajan en esa ciudad (un repartidor de Milagro no recibe avisos de Babahoyo).
+ */
+export async function availableCourierIds(cityId?: string) {
   const rows = await getDb().select({ id: users.id }).from(users).where(and(
     eq(users.appRole, "courier"),
     eq(users.courierApproved, true),
     eq(users.courierAvailable, true),
+    ...(cityId ? [eq(users.courierCityId, cityId)] : []),
   ));
   return rows.map((r) => r.id);
 }
@@ -141,7 +146,8 @@ export async function notifyCouriersOrderReady(orderId: number, opts: { reminder
     const [order] = await db.select().from(orders).where(and(eq(orders.id, orderId), eq(orders.status, "ready"), isNull(orders.courierId))).limit(1);
     if (!order || order.type !== "delivery") return { recipients: 0, sent: 0 };
     const [biz] = await db.select().from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
-    const ids = await availableCourierIds();
+    // Solo a los repartidores de la ciudad del local; si el local no existe ya, a nadie.
+    const ids = biz ? await availableCourierIds(cityIdForPoint(biz.lat, biz.lng)) : [];
     if (!ids.length) return { recipients: 0, sent: 0 };
     const place = biz?.name ?? "un local";
     const fee = order.deliveryFee.toFixed(2);

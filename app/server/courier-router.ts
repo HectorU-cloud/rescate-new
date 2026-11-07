@@ -11,6 +11,8 @@ import { loadBusinessesByIds } from "./lib/business-queries";
 import { logOrderEvent } from "./lib/order-events";
 import { redactForCourierBoard } from "./lib/order-privacy";
 import { codesMatch } from "./lib/codes";
+import { canCourierSeeOrder, courierCityCheck } from "./lib/courier-city";
+import { cityById } from "@contracts/cities";
 import { MAX_ACTIVE_DELIVERIES, canCourierRelease, hasReachedActiveLimit } from "./lib/order-rules";
 import { BUSINESS_RULES } from "@contracts/constants";
 import { businesses, courierLocations, orderEvents, orderItems, orders, users, walletEntries } from "@db/schema";
@@ -66,8 +68,13 @@ export const courierRouter = createRouter({
       )
       .orderBy(desc(orders.createdAt));
     const byId = await loadBusinessesByIds(rows.map((o) => o.businessId));
+    // Solo los pedidos que se recogen en la ciudad donde el repartidor trabaja (sin ciudad elegida no ve ninguno).
+    const inMyCity = rows.filter((o) => {
+      const biz = byId.get(o.businessId);
+      return !!biz && canCourierSeeOrder(courier.courierCityId, biz);
+    });
     // Antes de aceptar no se revelan datos del cliente (teléfono, dirección, coordenadas, notas).
-    return rows.map((o) => ({ order: redactForCourierBoard(o), business: byId.get(o.businessId) ?? null }));
+    return inMyCity.map((o) => ({ order: redactForCourierBoard(o), business: byId.get(o.businessId) ?? null }));
   }),
 
   accept: authedQuery
@@ -93,6 +100,10 @@ export const courierRouter = createRouter({
       if (!order) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Este pedido ya fue tomado" });
       }
+      // Solo se toman pedidos que se recogen en la ciudad donde el repartidor trabaja.
+      const [pickup] = await db.select({ lat: businesses.lat, lng: businesses.lng }).from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
+      const cityCheck = pickup ? courierCityCheck(courier.courierCityId, pickup) : { ok: false as const, reason: "other-city" as const, message: "No encontramos el local de este pedido." };
+      if (!cityCheck.ok) throw new TRPCError({ code: "FORBIDDEN", message: cityCheck.message });
       // Quien agotó los intentos del código de retiro de este pedido no puede volver a tomarlo
       // (si no, podría repetir "tomar → 5 intentos → soltar" para seguir adivinando códigos nuevos).
       const [locked] = await db.select({ id: orderEvents.id }).from(orderEvents)
@@ -233,6 +244,21 @@ export const courierRouter = createRouter({
     }),
 
   // Disponibilidad para recibir avisos de pedidos nuevos
+  // Ciudad donde trabaja el repartidor (null = todavía no la eligió).
+  myCity: authedQuery.query(async ({ ctx }) => {
+    const [row] = await getDb().select({ cityId: users.courierCityId }).from(users).where(eq(users.id, ctx.user.id)).limit(1);
+    return { cityId: cityById(row?.cityId)?.id ?? null };
+  }),
+  // El repartidor dice (o el GPS de su dispositivo detecta) en qué ciudad está. Solo se guarda el id de la ciudad.
+  setCity: authedQuery
+    .input(z.object({ cityId: z.string().max(40) }))
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.user.appRole !== "courier") throw new TRPCError({ code: "FORBIDDEN", message: "Regístrate como repartidor" });
+      const city = cityById(input.cityId);
+      if (!city) throw new TRPCError({ code: "BAD_REQUEST", message: "Esa ciudad no está disponible." });
+      await getDb().update(users).set({ courierCityId: city.id }).where(eq(users.id, ctx.user.id));
+      return { cityId: city.id };
+    }),
   availability: authedQuery.query(async ({ ctx }) => {
     const [row] = await getDb().select({ available: users.courierAvailable }).from(users).where(eq(users.id, ctx.user.id)).limit(1);
     return { available: row?.available ?? false };

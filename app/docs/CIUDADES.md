@@ -33,8 +33,9 @@ Una línea en `contracts/cities.ts`:
 - `id`: minúsculas y sin espacios (se guarda en el dispositivo; no lo cambies después).
 - Las coordenadas son el **centro aproximado**: confírmalas en Google Maps.
 - Mantén los centros a más de 5 km entre sí (hay una prueba que lo exige).
-- Mientras la zona de servicio siga siendo 40 km alrededor de Milagro (`BUSINESS_RULES.serviceAreaRadiusKm`),
-  una ciudad fuera de ese círculo no podrá registrar locales. La prueba `cities.test.ts` te avisa.
+- **La zona de servicio es el radio de 40 km alrededor de Milagro MÁS el área de cada ciudad de la lista**
+  (`isInServiceArea` en `contracts/geo.ts`). Así una ciudad en el borde del radio —como Babahoyo, a ~37,6 km, cuyo norte
+  pasa de los 40 km— se puede usar completa, y agregar una ciudad basta para que sus locales puedan registrarse.
 
 ## Qué se filtra y qué no
 - **Sí se filtra:** `catalog.businesses` (lista de Inicio) y `catalog.rescuePacks` (Inicio y Rescates).
@@ -43,8 +44,23 @@ Una línea en `contracts/cities.ts`:
 - `catalog.cityCounts` devuelve cuántos locales visibles hay por ciudad (para el selector).
 - El mapa donde se marca una dirección o un local abre centrado en la ciudad elegida.
 
+## Repartidores: solo ven y reciben pedidos de su ciudad
+Cada repartidor tiene una **ciudad de trabajo** (`users.courierCityId`, solo el id de la ciudad). Se elige con el botón de
+ciudad de su panel (al entrar por primera vez se le pregunta; no se puede saltar ni elegir "todas").
+
+| Qué | Regla |
+| --- | --- |
+| Tablero "Pedidos disponibles" | Solo pedidos cuyo **local** (donde se recoge) está en su ciudad. Sin ciudad elegida, ninguno. |
+| Tomar un pedido (`courier.accept`) | Rechazado si es de otra ciudad (aunque conozca el id): "Este pedido es de Babahoyo. Cambia tu ciudad de trabajo…". |
+| Avisos push de "pedido listo" y recordatorios | Solo a los repartidores disponibles **de la ciudad del local**. |
+| Entregas que ya lleva | No se esconden si cambia de ciudad. |
+| Cambio automático | Al abrir el panel, **solo si ya había concedido el permiso de ubicación**, la ciudad se actualiza sola (p. ej. si viajó). Nunca se lanza el permiso por su cuenta. |
+
+**Puesta en marcha:** ejecuta `db/manual/2026-11-courier-city.sql` (o `npm run db:push` en desarrollo). Los repartidores
+existentes quedan sin ciudad y no ven pedidos hasta elegirla la próxima vez que abran su panel: **avísales**.
+
 ## Pendiente (ideas)
-- Repartidores: hoy ven los pedidos listos de todas las ciudades; podría filtrarse por ciudad.
+- Mostrar la ciudad de cada repartidor en el panel de admin.
 - Si una ciudad crece mucho (p. ej. Guayaquil), un solo punto central no basta para asignar bien los locales de sus bordes.
   Entonces convendría una columna `cityId` en `businesses` que el admin pueda corregir.
 - Mostrar locales de ciudades cercanas ("Incluir Yaguachi").

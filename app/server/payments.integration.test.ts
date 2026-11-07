@@ -73,7 +73,7 @@ describe.skipIf(!enabled)("pagos, comprobantes y liquidaciones (MySQL real + S3 
   async function mkUser(kind: "customer" | "business" | "courier" | "admin") {
     const [{ id }] = await db.insert(S.users).values({
       unionId: `${tag}-u${seq++}`, name: `${tag} ${kind}`,
-      ...(kind === "admin" ? { role: "admin" as const } : { appRole: kind, courierApproved: kind === "courier" }),
+      ...(kind === "admin" ? { role: "admin" as const } : { appRole: kind, courierApproved: kind === "courier", courierCityId: kind === "courier" ? "milagro" : null }),
     }).$returningId();
     created.users.push(id);
     return (await db.select().from(S.users).where(eq(S.users.id, id)))[0];

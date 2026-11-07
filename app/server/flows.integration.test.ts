@@ -27,6 +27,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
   let S: typeof import("@db/schema");
   let appRouter: (typeof import("./router"))["appRouter"];
   let sweepOrders: (typeof import("./lib/maintenance"))["sweepOrders"];
+  let push: typeof import("./lib/push-notifications");
 
   const tag = `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   let seq = 0;
@@ -39,6 +40,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
     S = await import("@db/schema");
     appRouter = (await import("./router")).appRouter;
     sweepOrders = (await import("./lib/maintenance")).sweepOrders;
+    push = await import("./lib/push-notifications");
   });
 
   afterAll(async () => {
@@ -62,7 +64,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
   async function mkUser(kind: "customer" | "business" | "courier") {
     const [{ id }] = await db
       .insert(S.users)
-      .values({ unionId: `${tag}-u${seq++}`, name: `${tag} ${kind}`, appRole: kind, courierApproved: kind === "courier" })
+      .values({ unionId: `${tag}-u${seq++}`, name: `${tag} ${kind}`, appRole: kind, courierApproved: kind === "courier", courierCityId: kind === "courier" ? "milagro" : null })
       .$returningId();
     created.users.push(id);
     const [user] = await db.select().from(S.users).where(eq(S.users.id, id));
@@ -1494,6 +1496,15 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect(await list()).toEqual(["a-milagro", "b-yaguachi", "c-guayaquil"]);
     });
 
+    it("un local de Babahoyo aparece en Babahoyo y no en Milagro", async () => {
+      const sc = "t1b";
+      await mkCityBusiness(sc, "z-babahoyo", { lat: -1.8022, lng: -79.5344 });
+      await mkCityBusiness(sc, "y-milagro", AT.milagro);
+      const c = await asCustomer();
+      expect(names(sc, await c.catalog.businesses({ query: prefix(sc), cityId: "babahoyo" }))).toEqual(["z-babahoyo"]);
+      expect(names(sc, await c.catalog.businesses({ query: prefix(sc), cityId: "milagro" }))).toEqual(["y-milagro"]);
+    });
+
     it("una ciudad desconocida (p. ej. retirada de la lista) no esconde nada", async () => {
       const sc = "t2";
       await mkCityBusiness(sc, "d-milagro", AT.milagro);
@@ -1563,7 +1574,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect(get(after, "milagro") - get(before, "milagro")).toBe(2);
       expect(get(after, "guayaquil") - get(before, "guayaquil")).toBe(1);
       expect(get(after, "yaguachi") - get(before, "yaguachi")).toBe(0);
-      expect(after.map((r) => r.cityId).sort()).toEqual(["duran", "guayaquil", "milagro", "naranjito", "yaguachi"]);
+      expect(after.map((r) => r.cityId).sort()).toEqual(["babahoyo", "duran", "guayaquil", "milagro", "naranjito", "yaguachi"]);
     });
 
     it("al filtrar por ciudad la respuesta sigue sin datos internos del local", async () => {
@@ -1571,6 +1582,120 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       await mkCityBusiness(sc, "s-privado", AT.milagro, { pendingName: "Nombre pendiente", approvalNote: "Nota interna" });
       const [row] = await (await asCustomer()).catalog.businesses({ query: prefix(sc), cityId: "milagro" });
       for (const k of ["ownerId", "pendingName", "pendingAddress", "approvalNote"]) expect(k in row).toBe(false);
+    });
+  });
+
+  // ------------------------------------------------------------------ repartidor: solo trabaja en su ciudad
+  describe("repartidor: solo ve y toma pedidos de su ciudad", () => {
+    const MILAGRO_AT = { lat: -2.134, lng: -79.594 };
+    const BABAHOYO_AT = { lat: -1.8022, lng: -79.5344 };
+
+    /** Pedido listo para recoger (sin repartidor) en un local de la ciudad indicada. */
+    async function mkReadyOrder(at: { lat: number; lng: number }, label: string) {
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id, { name: `${tag}-cc ${label}`, ...at });
+      const customer = await mkUser("customer");
+      return mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date() });
+    }
+    async function courierIn(cityId: string | null) {
+      const u = await mkUser("courier");
+      await db.update(S.users).set({ courierCityId: cityId }).where(eq(S.users.id, u.id));
+      return u;
+    }
+    const boardIds = async (u: Awaited<ReturnType<typeof mkUser>>) => (await callerFor(u).courier.available()).map((r) => r.order.id);
+
+    it("el tablero muestra solo los pedidos que se recogen en la ciudad del repartidor", async () => {
+      const inMilagro = await mkReadyOrder(MILAGRO_AT, "a");
+      const inBabahoyo = await mkReadyOrder(BABAHOYO_AT, "b");
+      const courier = await courierIn("milagro");
+      const mine = await boardIds(courier);
+      expect(mine).toContain(inMilagro);
+      expect(mine).not.toContain(inBabahoyo);
+
+      const other = await courierIn("babahoyo");
+      const theirs = await boardIds(other);
+      expect(theirs).toContain(inBabahoyo);
+      expect(theirs).not.toContain(inMilagro);
+    });
+
+    it("al cambiar de ciudad, el tablero cambia en el acto", async () => {
+      const inMilagro = await mkReadyOrder(MILAGRO_AT, "c");
+      const inBabahoyo = await mkReadyOrder(BABAHOYO_AT, "d");
+      const courier = await courierIn("milagro");
+      expect(await boardIds(courier)).toContain(inMilagro);
+      await callerFor(courier).courier.setCity({ cityId: "babahoyo" });
+      const after = await boardIds(courier);
+      expect(after).toContain(inBabahoyo);
+      expect(after).not.toContain(inMilagro);
+    });
+
+    it("sin ciudad elegida no ve ningún pedido ni puede tomar uno", async () => {
+      const order = await mkReadyOrder(MILAGRO_AT, "e");
+      const courier = await courierIn(null);
+      expect(await boardIds(courier)).toEqual([]);
+      await expect(callerFor(courier).courier.accept({ orderId: order })).rejects.toThrow(/Elige tu ciudad/);
+      expect((await getOrder(order)).courierId).toBeNull();
+      await callerFor(courier).courier.setCity({ cityId: "milagro" });
+      expect(await boardIds(courier)).toContain(order);
+    });
+
+    it("no puede tomar un pedido de otra ciudad aunque conozca su id (el mensaje dice cuál es)", async () => {
+      const inBabahoyo = await mkReadyOrder(BABAHOYO_AT, "f");
+      const courier = await courierIn("milagro");
+      await expect(callerFor(courier).courier.accept({ orderId: inBabahoyo })).rejects.toThrow(/Babahoyo/);
+      const order = await getOrder(inBabahoyo);
+      expect([order.status, order.courierId]).toEqual(["ready", null]);
+    });
+
+    it("sí puede tomar un pedido de su ciudad", async () => {
+      const inMilagro = await mkReadyOrder(MILAGRO_AT, "g");
+      const courier = await courierIn("milagro");
+      await callerFor(courier).courier.accept({ orderId: inMilagro });
+      expect((await getOrder(inMilagro)).courierId).toBe(courier.id);
+    });
+
+    it("cambiar de ciudad no esconde las entregas que ya lleva", async () => {
+      const courier = await courierIn("babahoyo");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id, { name: `${tag}-cc h`, ...BABAHOYO_AT });
+      const customer = await mkUser("customer");
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status: "picked_up", courierId: courier.id, courierAcceptedAt: new Date() });
+      await callerFor(courier).courier.setCity({ cityId: "milagro" });
+      const mine = await callerFor(courier).courier.myDeliveries();
+      expect(mine.some((r) => r.order.id === orderId)).toBe(true);
+    });
+
+    it("setCity solo acepta ciudades de la lista y solo a repartidores; myCity devuelve lo guardado", async () => {
+      const courier = await courierIn(null);
+      expect((await callerFor(courier).courier.myCity()).cityId).toBeNull();
+      await expect(callerFor(courier).courier.setCity({ cityId: "atlantis" })).rejects.toThrow(/no está disponible/);
+      await expect(callerFor(await mkUser("customer")).courier.setCity({ cityId: "milagro" })).rejects.toThrow(/Regístrate como repartidor/);
+      expect(await callerFor(courier).courier.setCity({ cityId: "duran" })).toEqual({ cityId: "duran" });
+      expect((await callerFor(courier).courier.myCity()).cityId).toBe("duran");
+      // una ciudad guardada que ya no existe en la lista se trata como no elegida
+      await db.update(S.users).set({ courierCityId: "atlantis" }).where(eq(S.users.id, courier.id));
+      expect((await callerFor(courier).courier.myCity()).cityId).toBeNull();
+    });
+
+    it("los avisos push de pedido listo solo van a los repartidores disponibles de la ciudad del local", async () => {
+      const inMilagro = await courierIn("milagro");
+      const inBabahoyo = await courierIn("babahoyo");
+      const noCity = await courierIn(null);
+      const offline = await courierIn("babahoyo");
+      await db.update(S.users).set({ courierAvailable: false }).where(eq(S.users.id, offline.id));
+
+      const milagro = await push.availableCourierIds("milagro");
+      expect(milagro).toContain(inMilagro.id);
+      for (const u of [inBabahoyo, noCity, offline]) expect(milagro).not.toContain(u.id);
+      const babahoyo = await push.availableCourierIds("babahoyo");
+      expect(babahoyo).toContain(inBabahoyo.id);
+      for (const u of [inMilagro, noCity, offline]) expect(babahoyo).not.toContain(u.id);
+
+      // El aviso real calcula la ciudad desde el pin del local del pedido.
+      const orderB = await mkReadyOrder(BABAHOYO_AT, "i");
+      expect((await push.notifyCouriersOrderReady(orderB)).recipients).toBe((await push.availableCourierIds("babahoyo")).length);
+      const orderM = await mkReadyOrder(MILAGRO_AT, "j");
+      expect((await push.notifyCouriersOrderReady(orderM)).recipients).toBe((await push.availableCourierIds("milagro")).length);
     });
   });
 });

@@ -43,7 +43,7 @@ describe.skipIf(!enabled)("estado de cuenta, límite de deuda y preparación (My
 
   type User = Awaited<ReturnType<typeof mkUser>>;
   async function mkUser(kind: "customer" | "business" | "courier") {
-    const [{ id }] = await db.insert(S.users).values({ unionId: `${tag}-u${seq++}`, name: `${tag} ${kind}`, appRole: kind, courierApproved: kind === "courier" }).$returningId();
+    const [{ id }] = await db.insert(S.users).values({ unionId: `${tag}-u${seq++}`, name: `${tag} ${kind}`, appRole: kind, courierApproved: kind === "courier", courierCityId: kind === "courier" ? "milagro" : null }).$returningId();
     created.users.push(id);
     return (await db.select().from(S.users).where(eq(S.users.id, id)))[0];
   }

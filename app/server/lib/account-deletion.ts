@@ -107,6 +107,7 @@ export async function deleteAccount(user: User): Promise<void> {
         courierVerification: "pending",
         courierReviewNote: null,
         courierAvailable: false,
+        courierCityId: null,
         sessionVersion: user.sessionVersion + 1, // invalida la sesión actual y cualquier otra
         deletedAt: new Date(),
       })
