@@ -1,18 +1,23 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
-import { Search, MapPin, ChevronRight, Heart, Clock3, Leaf, Sparkles } from "lucide-react";
+import { Search, ChevronRight, Heart, Clock3, Leaf, Sparkles } from "lucide-react";
 import { trpc } from "@/providers/trpc";
-import { BUSINESS_CATEGORIES, MILAGRO } from "@contracts/constants";
+import { BUSINESS_CATEGORIES } from "@contracts/constants";
 import { BusinessCard, RescueCard } from "@/components/cards";
+import CityChip from "@/components/CityChip";
+import { useCity } from "@/hooks/useCity";
 
 export default function Home() {
   const [category, setCategory] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const { city, setCity } = useCity();
+  // Sin ciudad elegida (o "todas") no se filtra: se ve todo, como antes.
+  const cityId = city?.id;
   const businesses = trpc.catalog.businesses.useQuery(
-    { category: category ?? undefined, query: query || undefined },
+    { category: category ?? undefined, query: query || undefined, cityId },
     { staleTime: 30_000 },
   );
-  const rescue = trpc.catalog.rescuePacks.useQuery(undefined, { staleTime: 30_000 });
+  const rescue = trpc.catalog.rescuePacks.useQuery({ cityId }, { staleTime: 30_000 });
 
   const sortedBusinesses = useMemo(() => {
     const rows = [...(businesses.data ?? [])];
@@ -30,9 +35,7 @@ export default function Home() {
         <div className="hero-orb hero-orb-one" aria-hidden="true" />
         <div className="hero-orb hero-orb-two" aria-hidden="true" />
         <div className="relative z-10 max-w-2xl">
-          <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-bold text-white/90 backdrop-blur-sm">
-            <MapPin size={14} /> {MILAGRO.name}
-          </div>
+          <CityChip />
           <p className="mt-5 flex items-center gap-2 text-xs font-extrabold uppercase tracking-[.18em] text-[#a9e6cb]">
             <Leaf size={15} /> Bueno para ti, mejor para el planeta
           </p>
@@ -94,7 +97,7 @@ export default function Home() {
           <div className="mb-4 flex items-end justify-between gap-3">
             <div>
               <p className="text-xs font-extrabold uppercase tracking-[.15em] text-[#d85a12]">Aprovecha antes de que termine el día</p>
-              <h2 className="font-display mt-1 text-xl font-extrabold sm:text-2xl">Rescates cerca de ti 🧡</h2>
+              <h2 className="font-display mt-1 text-xl font-extrabold sm:text-2xl">{city ? `Rescates en ${city.name}` : "Rescates cerca de ti"} 🧡</h2>
               <p className="mt-1 text-sm text-muted-foreground">Tus favoritos, con precios que se sienten bien.</p>
             </div>
             <Link to="/rescate" className="mb-1 inline-flex shrink-0 items-center gap-1 text-sm font-extrabold text-brand-dark hover:underline">Ver todos <ChevronRight size={17}/></Link>
@@ -110,7 +113,7 @@ export default function Home() {
           <div>
             <p className="text-xs font-extrabold uppercase tracking-[.15em] text-brand-dark">Descubre tu próximo favorito</p>
             <h2 className="font-display mt-1 text-xl font-extrabold sm:text-2xl">
-              {category ? `${BUSINESS_CATEGORIES.find((c) => c.id === category)?.emoji ?? ""} ${BUSINESS_CATEGORIES.find((c) => c.id === category)?.label ?? "Locales"}` : query ? `Resultados para “${query}”` : "Locales cerca de ti"}
+              {category ? `${BUSINESS_CATEGORIES.find((c) => c.id === category)?.emoji ?? ""} ${BUSINESS_CATEGORIES.find((c) => c.id === category)?.label ?? "Locales"}` : query ? `Resultados para “${query}”` : city ? `Locales en ${city.name}` : "Locales cerca de ti"}
             </h2>
           </div>
           {!category && !query && <span className="hidden rounded-full bg-brand-soft px-3 py-1.5 text-xs font-extrabold text-brand-dark sm:inline-flex">Abiertos primero</span>}
@@ -119,9 +122,16 @@ export default function Home() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-64 animate-pulse rounded-3xl bg-muted" />)}</div>
         ) : sortedBusinesses.length === 0 ? (
           <div className="rounded-3xl bg-card p-8 text-center ring-1 ring-border sm:p-12">
-            <p className="text-4xl">🔎</p><p className="font-display mt-3 text-lg font-extrabold">No encontramos locales</p>
-            <p className="mt-1 text-sm text-muted-foreground">Prueba con otra búsqueda o categoría.</p>
-            <button onClick={() => { setQuery(""); setCategory(null); }} className="mt-4 rounded-full bg-brand px-5 py-2.5 text-sm font-extrabold text-white">Limpiar filtros</button>
+            <p className="text-4xl">🔎</p>
+            <p className="font-display mt-3 text-lg font-extrabold">{city && !category && !query ? `Todavía no hay locales en ${city.name}` : "No encontramos locales"}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {city && !category && !query ? "Estamos sumando locales. Mientras tanto, mira los de todas las ciudades." : city ? `Prueba con otra búsqueda o categoría, o mira todas las ciudades.` : "Prueba con otra búsqueda o categoría."}
+            </p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              {(category || query) && <button onClick={() => { setQuery(""); setCategory(null); }} className="rounded-full bg-brand px-5 py-2.5 text-sm font-extrabold text-white">Limpiar filtros</button>}
+              {city && <button onClick={() => setCity(null, "manual")} className="rounded-full bg-secondary px-5 py-2.5 text-sm font-extrabold">Ver todas las ciudades</button>}
+              {!city && !category && !query && <button onClick={() => void businesses.refetch()} className="rounded-full bg-brand px-5 py-2.5 text-sm font-extrabold text-white">Actualizar</button>}
+            </div>
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{sortedBusinesses.map((b) => <BusinessCard key={b.id} business={b} />)}</div>

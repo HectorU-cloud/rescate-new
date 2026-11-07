@@ -1464,4 +1464,113 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect(mine?.approvalNote).toBe("Nota interna del admin");
     });
   });
+
+  // ------------------------------------------------------------------ ciudades en el catálogo
+  describe("catálogo por ciudad", () => {
+    const AT = {
+      milagro: { lat: -2.134, lng: -79.594 },
+      yaguachi: { lat: -2.1167, lng: -79.6833 },
+      guayaquil: { lat: -2.1894, lng: -79.8891 },
+    };
+    // Cada prueba usa su propio prefijo (`scope`): los locales de una prueba siguen en la base cuando corre la siguiente.
+    const prefix = (scope: string) => `${tag}-cy-${scope}`;
+    async function mkCityBusiness(scope: string, name: string, at: { lat: number; lng: number }, over: Partial<typeof S.businesses.$inferInsert> = {}) {
+      const owner = await mkUser("business");
+      return mkBusiness(owner.id, { name: `${prefix(scope)} ${name}`, opensAt: "00:00", closesAt: "00:00", ...at, ...over });
+    }
+    const names = (scope: string, list: { name: string }[]) => list.map((b) => b.name.replace(`${prefix(scope)} `, "")).sort();
+    const asCustomer = async () => callerFor(await mkUser("customer"));
+
+    it("cada ciudad ve solo los locales cuyo pin cae en ella; sin ciudad se ven todos", async () => {
+      const sc = "t1";
+      await mkCityBusiness(sc, "a-milagro", AT.milagro);
+      await mkCityBusiness(sc, "b-yaguachi", AT.yaguachi);
+      await mkCityBusiness(sc, "c-guayaquil", AT.guayaquil);
+      const c = await asCustomer();
+      const list = async (cityId?: string) => names(sc, await c.catalog.businesses({ query: prefix(sc), cityId }));
+      expect(await list("milagro")).toEqual(["a-milagro"]);
+      expect(await list("yaguachi")).toEqual(["b-yaguachi"]);
+      expect(await list("guayaquil")).toEqual(["c-guayaquil"]);
+      expect(await list()).toEqual(["a-milagro", "b-yaguachi", "c-guayaquil"]);
+    });
+
+    it("una ciudad desconocida (p. ej. retirada de la lista) no esconde nada", async () => {
+      const sc = "t2";
+      await mkCityBusiness(sc, "d-milagro", AT.milagro);
+      await mkCityBusiness(sc, "e-yaguachi", AT.yaguachi);
+      const c = await asCustomer();
+      expect(names(sc, await c.catalog.businesses({ query: prefix(sc), cityId: "atlantis" }))).toEqual(["d-milagro", "e-yaguachi"]);
+    });
+
+    it("el filtro de ciudad se combina con la búsqueda y la categoría", async () => {
+      const sc = "t3";
+      await mkCityBusiness(sc, "f-pizza", AT.milagro, { category: "pizza" });
+      await mkCityBusiness(sc, "g-pan", AT.milagro, { category: "bakery" });
+      await mkCityBusiness(sc, "h-pizza", AT.yaguachi, { category: "pizza" });
+      const c = await asCustomer();
+      expect(names(sc, await c.catalog.businesses({ query: prefix(sc), cityId: "milagro", category: "pizza" }))).toEqual(["f-pizza"]);
+      expect(names(sc, await c.catalog.businesses({ query: `${prefix(sc)} h-pizza`, cityId: "milagro" }))).toEqual([]);
+      expect(names(sc, await c.catalog.businesses({ query: `${prefix(sc)} h-pizza`, cityId: "yaguachi" }))).toEqual(["h-pizza"]);
+    });
+
+    it("si el dueño mueve el pin a otra ciudad, el local cambia de ciudad solo", async () => {
+      const sc = "t4";
+      const id = await mkCityBusiness(sc, "i-mudanza", AT.milagro);
+      const c = await asCustomer();
+      const inCity = async (cityId: string) => names(sc, await c.catalog.businesses({ query: prefix(sc), cityId }));
+      expect(await inCity("milagro")).toEqual(["i-mudanza"]);
+      await db.update(S.businesses).set(AT.yaguachi).where(eq(S.businesses.id, id));
+      expect(await inCity("milagro")).toEqual([]);
+      expect(await inCity("yaguachi")).toEqual(["i-mudanza"]);
+    });
+
+    it("los locales sin aprobar o sin ubicación confirmada no aparecen aunque sean de la ciudad", async () => {
+      const sc = "t5";
+      await mkCityBusiness(sc, "j-pendiente", AT.milagro, { approvalStatus: "pending" });
+      await mkCityBusiness(sc, "k-sinpin", AT.milagro, { locationConfirmed: false });
+      await mkCityBusiness(sc, "l-visible", AT.milagro);
+      const c = await asCustomer();
+      expect(names(sc, await c.catalog.businesses({ query: prefix(sc), cityId: "milagro" }))).toEqual(["l-visible"]);
+    });
+
+    it("los packs de rescate también se filtran por la ciudad de su local", async () => {
+      const sc = "t6";
+      const inMilagro = await mkPack(await mkCityBusiness(sc, "m-packs", AT.milagro), 3);
+      const inYaguachi = await mkPack(await mkCityBusiness(sc, "n-packs", AT.yaguachi), 3);
+      const c = await asCustomer();
+      const ids = async (cityId?: string) => (await c.catalog.rescuePacks(cityId ? { cityId } : undefined)).map((r) => r.pack.id);
+      const milagro = await ids("milagro");
+      expect(milagro).toContain(inMilagro);
+      expect(milagro).not.toContain(inYaguachi);
+      const yaguachi = await ids("yaguachi");
+      expect(yaguachi).toContain(inYaguachi);
+      expect(yaguachi).not.toContain(inMilagro);
+      const all = await ids();
+      expect(all).toContain(inMilagro);
+      expect(all).toContain(inYaguachi);
+    });
+
+    it("cityCounts cuenta solo locales visibles, por ciudad, y lista todas las ciudades", async () => {
+      const sc = "t7";
+      const c = await asCustomer();
+      const before = await c.catalog.cityCounts();
+      await mkCityBusiness(sc, "o-conteo1", AT.milagro);
+      await mkCityBusiness(sc, "p-conteo2", AT.milagro);
+      await mkCityBusiness(sc, "q-conteo3", AT.guayaquil);
+      await mkCityBusiness(sc, "r-oculto", AT.milagro, { approvalStatus: "pending" }); // no cuenta
+      const after = await c.catalog.cityCounts();
+      const get = (rows: typeof before, id: string) => rows.find((r) => r.cityId === id)!.businesses;
+      expect(get(after, "milagro") - get(before, "milagro")).toBe(2);
+      expect(get(after, "guayaquil") - get(before, "guayaquil")).toBe(1);
+      expect(get(after, "yaguachi") - get(before, "yaguachi")).toBe(0);
+      expect(after.map((r) => r.cityId).sort()).toEqual(["duran", "guayaquil", "milagro", "naranjito", "yaguachi"]);
+    });
+
+    it("al filtrar por ciudad la respuesta sigue sin datos internos del local", async () => {
+      const sc = "t8";
+      await mkCityBusiness(sc, "s-privado", AT.milagro, { pendingName: "Nombre pendiente", approvalNote: "Nota interna" });
+      const [row] = await (await asCustomer()).catalog.businesses({ query: prefix(sc), cityId: "milagro" });
+      for (const k of ["ownerId", "pendingName", "pendingAddress", "approvalNote"]) expect(k in row).toBe(false);
+    });
+  });
 });

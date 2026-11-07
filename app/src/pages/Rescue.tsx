@@ -1,14 +1,19 @@
 import { trpc } from "@/providers/trpc";
 import { RescueCard } from "@/components/cards";
+import CityChip from "@/components/CityChip";
+import { useCity } from "@/hooks/useCity";
 
 export default function Rescue() {
-  const rescue = trpc.catalog.rescuePacks.useQuery(undefined, {
-    staleTime: 30_000,
-  });
+  const { city, setCity } = useCity();
+  const rescue = trpc.catalog.rescuePacks.useQuery(
+    { cityId: city?.id },
+    { staleTime: 30_000 },
+  );
 
   return (
     <div className="space-y-5">
       <section className="rounded-3xl bg-rescue px-5 py-6 text-white md:px-8">
+        <CityChip className="mb-3" />
         <h1 className="font-display text-2xl font-extrabold leading-tight md:text-3xl">
           🧡 Rescata comida rica
         </h1>
@@ -40,8 +45,13 @@ export default function Rescue() {
             Por ahora no hay packs
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Los locales publican cerca de la hora de cierre. Vuelve más tarde.
+            {city ? `No hay packs en ${city.name} por ahora. ` : ""}Los locales publican cerca de la hora de cierre. Vuelve más tarde.
           </p>
+          {city && (
+            <button onClick={() => setCity(null, "manual")} className="mt-4 rounded-full bg-secondary px-5 py-2.5 text-sm font-extrabold">
+              Ver packs de todas las ciudades
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">

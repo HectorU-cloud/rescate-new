@@ -2,5 +2,5 @@
 export const LEGAL = {
   name: (import.meta.env.VITE_LEGAL_NAME as string | undefined)?.trim() || "Al Rescate",
   email: (import.meta.env.VITE_PRIVACY_EMAIL as string | undefined)?.trim() || "",
-  updated: "25 de octubre de 2026",
+  updated: "6 de noviembre de 2026",
 };

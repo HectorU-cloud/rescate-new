@@ -4,6 +4,7 @@ import "leaflet/dist/leaflet.css";
 import { BUSINESS_RULES, MILAGRO } from "@contracts/constants";
 import { isInServiceArea } from "@contracts/geo";
 import { addBaseLayer } from "@/lib/map-tiles";
+import { useCity } from "@/hooks/useCity";
 
 export type Point = { lat: number; lng: number };
 
@@ -30,6 +31,9 @@ export function LocationPicker({ value, onChange, className }: Props) {
   const markerRef = useRef<L.Marker | null>(null);
   const onChangeRef = useRef(onChange);
   const initialRef = useRef(value);
+  // Sin un punto previo, el mapa abre en la ciudad elegida (y en Milagro si eligió "todas" o aún no eligió).
+  const { city } = useCity();
+  const defaultCenterRef = useRef<Point>(city ?? MILAGRO);
   const [hint, setHint] = useState<string | null>(null);
   const [locating, setLocating] = useState(false);
 
@@ -59,7 +63,8 @@ export function LocationPicker({ value, onChange, className }: Props) {
     const el = containerRef.current;
     if (!el) return;
     const start = initialRef.current;
-    const map = L.map(el).setView(start ? [start.lat, start.lng] : [MILAGRO.lat, MILAGRO.lng], start ? 17 : 14);
+    const fallback = defaultCenterRef.current;
+    const map = L.map(el).setView(start ? [start.lat, start.lng] : [fallback.lat, fallback.lng], start ? 17 : 14);
     addBaseLayer(map);
     mapRef.current = map;
     if (start) placeMarker(start);

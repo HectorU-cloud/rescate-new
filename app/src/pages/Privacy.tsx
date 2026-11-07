@@ -43,7 +43,9 @@ export default function Privacy() {
 
       <h2>4. Ubicación</h2>
       <p>
-        Solo usamos tu ubicación cuando tú lo autorizas en el navegador: para marcar tu local, calcular tu entrega o, en el caso de repartidores,
+        Solo usamos tu ubicación cuando tú lo autorizas en el navegador: para saber en qué ciudad estás y mostrarte sus locales (esa comparación se
+        hace en tu dispositivo: no enviamos ni guardamos tu ubicación para esto, solo recordamos en tu dispositivo la ciudad que elegiste),
+        para marcar tu local, calcular tu entrega o, en el caso de repartidores,
         mostrar al cliente por dónde va su pedido. El GPS del repartidor se comparte únicamente con el cliente del pedido en curso y se reemplaza
         con cada actualización; no guardamos un historial de recorridos. Puedes retirar el permiso en cualquier momento desde tu navegador.
       </p>

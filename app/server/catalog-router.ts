@@ -5,6 +5,7 @@ import { getDb } from "./queries/connection";
 import { businesses, products, rescuePacks } from "@db/schema";
 import { isBusinessOpenNow, isBusinessPublic, isPackReservable } from "./lib/business-rules";
 import { isPackExpired } from "@contracts/packs";
+import { CITIES, cityById, cityIdForPoint } from "@contracts/cities";
 import { loadBusinessesByIds } from "./lib/business-queries";
 import { toPublicBusiness } from "./lib/public-business";
 import { loadOptionGroupsByProduct } from "./lib/product-options";
@@ -17,6 +18,18 @@ const withReservable = <T extends { pickupStart: string; pickupEnd: string; expi
 
 const withOpenNow = <T extends { isOpen: boolean; opensAt: string; closesAt: string }>(b: T) => ({ ...b, openNow: isBusinessOpenNow(b) });
 
+/**
+ * Filtro por ciudad. La ciudad de un local sale de su pin (ver `cityIdForPoint`), así que no hay nada que mantener:
+ * si el dueño mueve el pin, el local cambia de ciudad solo. Sin `cityId` —o con uno que ya no existe en la lista,
+ * p. ej. un dispositivo con una ciudad guardada que se retiró— no se filtra nada (se muestran todas).
+ */
+const inCity = (cityId: string | undefined) => {
+  const city = cityById(cityId);
+  return (b: { lat: number; lng: number }) => !city || cityIdForPoint(b.lat, b.lng) === city.id;
+};
+
+const cityInput = z.object({ cityId: z.string().max(40).optional() });
+
 export const catalogRouter = createRouter({
   // Lista de comercios, opcionalmente filtrados por categoría o búsqueda
   businesses: publicQuery
@@ -25,6 +38,7 @@ export const catalogRouter = createRouter({
         .object({
           category: z.string().optional(),
           query: z.string().optional(),
+          cityId: z.string().max(40).optional(),
         })
         .optional(),
     )
@@ -32,7 +46,7 @@ export const catalogRouter = createRouter({
       const db = getDb();
       // Solo comercios aprobados por el equipo son visibles al público.
       const rows = await db.select().from(businesses).where(and(eq(businesses.approvalStatus, "approved"), eq(businesses.locationConfirmed, true))).orderBy(desc(businesses.rating));
-      let out = rows;
+      let out = rows.filter(inCity(input?.cityId));
       if (input?.category) {
         out = out.filter((b) => b.category === input.category);
       }
@@ -83,8 +97,23 @@ export const catalogRouter = createRouter({
       return { business: withOpenNow(toPublicBusiness(business)), products: productsWithOptions, rescuePacks: packs.map(withReservable) };
     }),
 
-  // Todos los packs de rescate activos (sección "Rescate")
-  rescuePacks: publicQuery.query(async () => {
+  // Cuántos locales visibles hay en cada ciudad (para el selector de ciudad). Solo lee las coordenadas.
+  cityCounts: publicQuery.query(async () => {
+    const rows = await getDb()
+      .select({ lat: businesses.lat, lng: businesses.lng })
+      .from(businesses)
+      .where(and(eq(businesses.approvalStatus, "approved"), eq(businesses.locationConfirmed, true)));
+    const counts = new Map<string, number>(CITIES.map((c) => [c.id, 0]));
+    for (const r of rows) {
+      const id = cityIdForPoint(r.lat, r.lng);
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return CITIES.map((c) => ({ cityId: c.id, businesses: counts.get(c.id) ?? 0 }));
+  }),
+
+  // Todos los packs de rescate activos (sección "Rescate"), opcionalmente solo los de una ciudad
+  rescuePacks: publicQuery.input(cityInput.optional()).query(async ({ input }) => {
+    const sameCity = inCity(input?.cityId);
     const db = getDb();
     const packs = await db
       .select()
@@ -100,7 +129,7 @@ export const catalogRouter = createRouter({
           business: business ? withOpenNow(business) : null,
         };
       })
-      .filter((r) => r.business !== null && isBusinessPublic(r.business))
+      .filter((r) => r.business !== null && isBusinessPublic(r.business) && sameCity(r.business))
       // Primero los comercios abiertos; después, los que están cerrados.
       .sort((a, b) => Number(b.business!.openNow) - Number(a.business!.openNow));
   }),
