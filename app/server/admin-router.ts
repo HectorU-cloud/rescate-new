@@ -6,6 +6,8 @@ import { getDb } from "./queries/connection";
 import { cancelOrderAndRestock } from "./lib/orders";
 import { logOrderEvent } from "./lib/order-events";
 import { notifyOrderStatus, sendPushToUser } from "./lib/push-notifications";
+import { cityById, cityIdForPoint } from "@contracts/cities";
+import { buildCityOps } from "./lib/city-ops";
 import { businesses, claims, courierLocations, orderEvents, orders, ratings, users, walletEntries, financeSettings, settlements } from "@db/schema";
 import { buildStatements, hasActivity, periodBounds, type WalletRef } from "@contracts/wallet";
 import { WEATHER_SURCHARGE_MODES, summarizeDynamicSimulation, type SimulationRow } from "@contracts/pricing";
@@ -103,9 +105,9 @@ export const adminRouter = createRouter({
     const db = getDb();
     const entries = await db.select({ walletType: walletEntries.walletType, walletId: walletEntries.walletId, entryType: walletEntries.entryType, amount: walletEntries.amount, status: walletEntries.status })
       .from(walletEntries);
-    const couriers = await db.select({ id: users.id, name: users.name, email: users.email, phone: users.phone, courierApproved: users.courierApproved })
+    const couriers = await db.select({ id: users.id, name: users.name, email: users.email, phone: users.phone, courierApproved: users.courierApproved, courierCityId: users.courierCityId })
       .from(users).where(eq(users.appRole, "courier"));
-    const biz = await db.select({ id: businesses.id, name: businesses.name, ownerId: businesses.ownerId, ownerName: users.name, ownerEmail: users.email, approvalStatus: businesses.approvalStatus })
+    const biz = await db.select({ id: businesses.id, name: businesses.name, ownerId: businesses.ownerId, ownerName: users.name, ownerEmail: users.email, approvalStatus: businesses.approvalStatus, lat: businesses.lat, lng: businesses.lng })
       .from(businesses).leftJoin(users, eq(users.id, businesses.ownerId));
     const calculate = (type: "courier" | "business", id: number) => {
       const own = entries.filter((e) => e.walletType === type && Number(e.walletId) === id);
@@ -114,8 +116,8 @@ export const adminRouter = createRouter({
       return { balance: Math.round(balance * 100) / 100, pendingPayments: Math.round(pendingPayments * 100) / 100 };
     };
     return [
-      ...couriers.map((u) => ({ walletType: "courier" as const, walletId: u.id, name: u.name ?? "Repartidor sin nombre", email: u.email, phone: u.phone, active: u.courierApproved, ...calculate("courier", u.id) })),
-      ...biz.map((b) => ({ walletType: "business" as const, walletId: b.id, name: b.name, email: b.ownerEmail, phone: null, active: b.approvalStatus === "approved", ownerName: b.ownerName, ...calculate("business", b.id) })),
+      ...couriers.map((u) => ({ walletType: "courier" as const, walletId: u.id, name: u.name ?? "Repartidor sin nombre", email: u.email, phone: u.phone, active: u.courierApproved, cityName: cityById(u.courierCityId)?.name ?? null, ...calculate("courier", u.id) })),
+      ...biz.map((b) => ({ walletType: "business" as const, walletId: b.id, name: b.name, email: b.ownerEmail, phone: null, active: b.approvalStatus === "approved", ownerName: b.ownerName, cityName: cityById(cityIdForPoint(b.lat, b.lng))?.name ?? null, ...calculate("business", b.id) })),
     ].sort((a, b) => b.balance - a.balance);
   }),
 
@@ -274,6 +276,14 @@ export const adminRouter = createRouter({
       .where(and(eq(users.appRole, "courier"), eq(users.courierApproved, true), eq(users.courierAvailable, true)));
     const [openClaims] = await db.select({ count: sql<number>`count(*)` }).from(claims).where(eq(claims.status, "open"));
 
+    // Por ciudad: pedidos listos esperando repartidor vs. repartidores conectados que trabajan allí.
+    const waitingPickups = await db.select({ lat: businesses.lat, lng: businesses.lng }).from(orders)
+      .innerJoin(businesses, eq(businesses.id, orders.businessId))
+      .where(and(eq(orders.type, "delivery"), eq(orders.status, "ready"), sql`${orders.courierId} is null`));
+    const approvedCouriers = await db.select({ cityId: users.courierCityId, available: users.courierAvailable }).from(users)
+      .where(and(eq(users.appRole, "courier"), eq(users.courierApproved, true)));
+    const cityOps = buildCityOps({ waitingPickups, couriers: approvedCouriers });
+
     const [bizRatings] = await db.select({ avg: sql<number | null>`avg(${ratings.businessStars})`, count: sql<number>`count(*)` }).from(ratings);
     const [courierRatings] = await db.select({ avg: sql<number | null>`avg(${ratings.courierStars})`, count: sql<number>`count(${ratings.courierStars})` }).from(ratings);
     // Comercios con al menos 3 calificaciones y rating bajo: candidatos a revisión.
@@ -298,6 +308,8 @@ export const adminRouter = createRouter({
       pendingBusinesses: Number(pendingBusinesses?.count ?? 0),
       pendingCouriers: Number(pendingCouriers?.count ?? 0),
       availableCouriers: Number(availableCouriers?.count ?? 0),
+      cityOps: cityOps.rows,
+      couriersWithoutCity: cityOps.couriersWithoutCity,
       openClaims: Number(openClaims?.count ?? 0),
       ratingsCount: Number(bizRatings?.count ?? 0),
       avgBusinessRating: bizRatings?.avg == null ? null : Math.round(Number(bizRatings.avg) * 10) / 10,

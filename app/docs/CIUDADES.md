@@ -59,8 +59,16 @@ ciudad de su panel (al entrar por primera vez se le pregunta; no se puede saltar
 **Puesta en marcha:** ejecuta `db/manual/2026-11-courier-city.sql` (o `npm run db:push` en desarrollo). Los repartidores
 existentes quedan sin ciudad y no ven pedidos hasta elegirla la próxima vez que abran su panel: **avísales**.
 
+## Panel de admin
+- **Resumen → "Por ciudad":** para cada ciudad, cuántos pedidos están esperando repartidor y cuántos repartidores conectados
+  trabajan allí. Si hay pedidos esperando y ningún repartidor, la fila se marca en rojo ("⚠️ sin cobertura").
+- Un aviso ámbar cuenta a los repartidores aprobados que **aún no eligieron ciudad** (no ven pedidos hasta elegirla).
+  Después de ejecutar el SQL de `courierCityId`, todos los repartidores existentes aparecerán ahí hasta que abran su panel.
+- **Finanzas → lista de cuentas:** cada repartidor y cada local muestra su ciudad ("sin ciudad" si el repartidor no eligió).
+  La ciudad de un local sale de su pin en el mapa.
+
 ## Pendiente (ideas)
-- Mostrar la ciudad de cada repartidor en el panel de admin.
+- Que el admin pueda cambiar la ciudad de un repartidor.
 - Si una ciudad crece mucho (p. ej. Guayaquil), un solo punto central no basta para asignar bien los locales de sus bordes.
   Entonces convendría una columna `cityId` en `businesses` que el admin pueda corregir.
 - Mostrar locales de ciudades cercanas ("Incluir Yaguachi").

@@ -1698,4 +1698,71 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect((await push.notifyCouriersOrderReady(orderM)).recipients).toBe((await push.availableCourierIds("milagro")).length);
     });
   });
+
+  // ------------------------------------------------------------------ admin: vista por ciudad
+  describe("admin: ciudades de repartidores y resumen por ciudad", () => {
+    const MILAGRO_AT = { lat: -2.134, lng: -79.594 };
+    const BABAHOYO_AT = { lat: -1.8022, lng: -79.5344 };
+    const courierIn = async (cityId: string | null, available = true) => {
+      const u = await mkUser("courier");
+      await db.update(S.users).set({ courierCityId: cityId, courierAvailable: available }).where(eq(S.users.id, u.id));
+      return u;
+    };
+    const readyOrderAt = async (at: { lat: number; lng: number }, over: Partial<typeof S.orders.$inferInsert> = {}) => {
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id, { name: `${tag}-ops`, ...at });
+      const customer = await mkUser("customer");
+      return mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date(), ...over });
+    };
+    const cityRow = (ops: { cityId: string; waitingOrders: number; availableCouriers: number }[], id: string) => ops.find((r) => r.cityId === id)!;
+
+    it("el resumen cuenta pedidos esperando y repartidores conectados por ciudad (con deltas, la base se comparte)", async () => {
+      const admin = callerFor(await mkAdmin());
+      const before = await admin.admin.overview();
+
+      await readyOrderAt(BABAHOYO_AT);                                                  // espera repartidor → cuenta
+      const taken = await courierIn("babahoyo");
+      await readyOrderAt(BABAHOYO_AT, { courierId: taken.id, courierAcceptedAt: new Date() }); // ya reservado → no cuenta
+      await readyOrderAt(BABAHOYO_AT, { type: "rescue" });                                // rescate → no cuenta
+      await readyOrderAt(BABAHOYO_AT, { status: "pending" });                             // aún no está listo → no cuenta
+      await courierIn("babahoyo");                                                        // conectado en Babahoyo (+1, con `taken` = +2)
+      await courierIn("babahoyo", false);                                                 // desconectado → no cuenta como conectado
+      await courierIn(null);                                                              // sin ciudad
+      await courierIn("atlantis");                                                        // ciudad que ya no existe
+
+      const after = await admin.admin.overview();
+      expect(cityRow(after.cityOps, "babahoyo").waitingOrders - cityRow(before.cityOps, "babahoyo").waitingOrders).toBe(1);
+      expect(cityRow(after.cityOps, "babahoyo").availableCouriers - cityRow(before.cityOps, "babahoyo").availableCouriers).toBe(2);
+      expect(cityRow(after.cityOps, "milagro").waitingOrders).toBe(cityRow(before.cityOps, "milagro").waitingOrders);
+      expect(after.couriersWithoutCity - before.couriersWithoutCity).toBe(2);
+      expect(after.cityOps.map((r) => r.cityId)).toEqual(before.cityOps.map((r) => r.cityId));
+    });
+
+    it("el pedido esperando se cuenta en la ciudad de su local, no en otra", async () => {
+      const admin = callerFor(await mkAdmin());
+      const before = await admin.admin.overview();
+      await readyOrderAt(MILAGRO_AT);
+      const after = await admin.admin.overview();
+      expect(cityRow(after.cityOps, "milagro").waitingOrders - cityRow(before.cityOps, "milagro").waitingOrders).toBe(1);
+      expect(cityRow(after.cityOps, "babahoyo").waitingOrders).toBe(cityRow(before.cityOps, "babahoyo").waitingOrders);
+    });
+
+    it("la lista de cuentas muestra la ciudad de cada repartidor y de cada local", async () => {
+      const admin = callerFor(await mkAdmin());
+      const inDuran = await courierIn("duran");
+      const noCity = await courierIn(null);
+      const owner = await mkUser("business");
+      const bizId = await mkBusiness(owner.id, { name: `${tag}-ops-wallet`, ...BABAHOYO_AT });
+      const wallets = await admin.admin.financeWallets();
+      const find = (type: "courier" | "business", id: number) => wallets.find((w) => w.walletType === type && w.walletId === id)!;
+      expect(find("courier", inDuran.id).cityName).toBe("Durán");
+      expect(find("courier", noCity.id).cityName).toBeNull();
+      expect(find("business", bizId).cityName).toBe("Babahoyo");
+    });
+
+    it("solo un admin ve el resumen por ciudad", async () => {
+      await expect(callerFor(await mkUser("customer")).admin.overview()).rejects.toThrow();
+      await expect(callerFor(await courierIn("milagro")).admin.overview()).rejects.toThrow();
+    });
+  });
 });

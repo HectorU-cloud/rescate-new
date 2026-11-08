@@ -122,6 +122,29 @@ function Metrics({ data, loading }: { data: Overview | undefined; loading: boole
       </div>
 
       <section className={card}>
+        <p className="mb-3 text-xs font-extrabold uppercase tracking-wide text-muted-foreground">Por ciudad</p>
+        <ul className="divide-y divide-border">
+          {data.cityOps.map((c) => {
+            const unattended = c.waitingOrders > 0 && c.availableCouriers === 0;
+            return (
+              <li key={c.cityId} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+                <span className="font-extrabold">{c.name}</span>
+                <span className={`text-xs font-bold ${unattended ? "text-destructive" : "text-muted-foreground"}`}>
+                  {c.waitingOrders} esperando repartidor · {c.availableCouriers} repartidor{c.availableCouriers === 1 ? "" : "es"} conectado{c.availableCouriers === 1 ? "" : "s"}
+                  {unattended ? " ⚠️ sin cobertura" : ""}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        {data.couriersWithoutCity > 0 && (
+          <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-900 ring-1 ring-amber-200">
+            {data.couriersWithoutCity} repartidor{data.couriersWithoutCity === 1 ? "" : "es"} aprobado{data.couriersWithoutCity === 1 ? "" : "s"} no ha{data.couriersWithoutCity === 1 ? "" : "n"} elegido su ciudad de trabajo: no ven pedidos hasta elegirla.
+          </p>
+        )}
+      </section>
+
+      <section className={card}>
         <p className="mb-3 text-xs font-extrabold uppercase tracking-wide text-muted-foreground">Pedidos de los últimos 7 días</p>
         {data.perDay.length === 0 ? (
           <p className="text-sm text-muted-foreground">Aún no hay pedidos en este periodo.</p>
