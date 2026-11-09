@@ -6,8 +6,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
 import { APP_ROLES, IMAGE_RULES, type AppRole } from "@contracts/constants";
 import { toast } from "sonner";
-import { Camera, ShieldCheck, Bike, BadgeCheck, UserRound, Phone, Bell, SlidersHorizontal } from "lucide-react";
+import { Camera, ShieldCheck, Bike, BadgeCheck, UserRound, Phone, Bell, SlidersHorizontal, Compass } from "lucide-react";
 import { getFirebaseVapidKey, getFirebaseWebConfig, loadPushClient } from "@/lib/push-client";
+import { resetTour } from "@/lib/tour-state";
+import { TOUR_LANDING, tourRoleFor } from "@/lib/tour-steps";
 
 export default function Profile() {
   const { user, isAuthenticated, logout, refresh } = useAuth({
@@ -151,6 +153,9 @@ export default function Profile() {
 
   if (!isAuthenticated || !user) return null;
 
+  // La guía de bienvenida de su rol (el admin no tiene).
+  const tourRole = tourRoleFor(user.appRole);
+
   return (
     <div className="mx-auto w-full max-w-2xl space-y-4 sm:space-y-5">
       <div className="rounded-3xl bg-brand-soft p-5 sm:p-6">
@@ -245,6 +250,19 @@ export default function Profile() {
           {pushBusy ? "Procesando…" : pushEnabled ? "Desactivar notificaciones en este dispositivo" : "Activar notificaciones"}
         </button>
       </section>
+
+      {tourRole && (
+        <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
+          <div className="flex items-center gap-2"><Compass className="h-4 w-4 text-brand" /><h2 className="font-display text-base font-extrabold">Guía de bienvenida</h2></div>
+          <p className="mt-1 text-xs font-semibold text-muted-foreground">Repasa paso a paso cómo funciona Rescate.</p>
+          <button
+            onClick={() => { resetTour(tourRole); navigate(TOUR_LANDING[tourRole]); }}
+            className="mt-3 w-full rounded-xl bg-secondary py-3 text-sm font-extrabold"
+          >
+            Ver la guía otra vez
+          </button>
+        </section>
+      )}
 
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">
         <div className="mb-1 flex items-center gap-2"><SlidersHorizontal className="h-4 w-4 text-brand" /><h2 className="font-display text-base font-extrabold">Modo de la app</h2></div>

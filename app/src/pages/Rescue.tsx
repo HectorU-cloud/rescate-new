@@ -1,6 +1,7 @@
 import { trpc } from "@/providers/trpc";
 import { RescueCard } from "@/components/cards";
 import CityChip from "@/components/CityChip";
+import WelcomeTour from "@/components/WelcomeTour";
 import { useCity } from "@/hooks/useCity";
 
 export default function Rescue() {
@@ -12,6 +13,7 @@ export default function Rescue() {
 
   return (
     <div className="space-y-5">
+      <WelcomeTour role="customer" />
       <section className="rounded-3xl bg-rescue px-5 py-6 text-white md:px-8">
         <CityChip className="mb-3" />
         <h1 className="font-display text-2xl font-extrabold leading-tight md:text-3xl">

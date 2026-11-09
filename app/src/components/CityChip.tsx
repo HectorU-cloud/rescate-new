@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { trpc } from "@/providers/trpc";
 import { useCity, type CityController } from "@/hooks/useCity";
+import { useTourPending } from "@/hooks/useTourSeen";
 import { CITIES, cityById, cityLabel } from "@contracts/cities";
 import { GEO_FAILURE_MESSAGES } from "@/lib/geolocate";
 
@@ -37,6 +38,8 @@ export default function CityChip({ className = "", mode = "browse", controller, 
   const browse = useCity();
   const { city, hasChosen, setCity, detect } = controller ?? browse;
   const work = mode === "work";
+  // Si a esta persona aún le toca la guía de bienvenida, la pregunta de la ciudad espera a que termine (no se encima una ventana con otra).
+  const tourPending = useTourPending(work ? "courier" : "customer");
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("ask");
   const [notice, setNotice] = useState<string | null>(null);
@@ -44,11 +47,11 @@ export default function CityChip({ className = "", mode = "browse", controller, 
 
   // La primera vez, se le pregunta.
   useEffect(() => {
-    if (!hasChosen) {
+    if (!hasChosen && !tourPending) {
       setView("ask");
       setOpen(true);
     }
-  }, [hasChosen]);
+  }, [hasChosen, tourPending]);
 
   const countOf = (id: string) => counts.data?.find((c) => c.cityId === id)?.businesses;
 

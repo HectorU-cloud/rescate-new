@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useNewOrderAlert } from "@/hooks/useNewOrderAlert";
+import WelcomeTour from "@/components/WelcomeTour";
 import { playNewOrderBeep, unlockAudio } from "@/lib/alert-sound";
 import { useAuth } from "@/hooks/useAuth";
 import { LOGIN_PATH } from "@/const";
@@ -336,6 +337,7 @@ function Panel({
 
   return (
     <div className="space-y-4">
+      <WelcomeTour role="business" />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-extrabold">{businessName}</h1>

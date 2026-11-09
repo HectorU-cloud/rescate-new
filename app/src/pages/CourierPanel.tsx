@@ -11,6 +11,7 @@ import { ClaimBox } from "@/components/ClaimBox";
 import { StaticMap } from "@/components/StaticMap";
 import WalletCard from "@/components/WalletCard";
 import CityChip from "@/components/CityChip";
+import WelcomeTour from "@/components/WelcomeTour";
 import { useCourierCity } from "@/hooks/useCourierCity";
 import { addDismissed, dismissedKey, parseDismissed, pruneDismissed } from "@/lib/dismissed-orders";
 
@@ -173,6 +174,7 @@ export default function CourierPanel() {
 
   return (
     <div className="space-y-5">
+      <WelcomeTour role="courier" />
       {/* Ganancias */}
       <section className="rounded-3xl bg-foreground p-5 text-white">
         <p className="text-xs font-extrabold uppercase tracking-wide text-white/60">

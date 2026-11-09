@@ -5,6 +5,7 @@ import { trpc } from "@/providers/trpc";
 import { BUSINESS_CATEGORIES } from "@contracts/constants";
 import { BusinessCard, RescueCard } from "@/components/cards";
 import CityChip from "@/components/CityChip";
+import WelcomeTour from "@/components/WelcomeTour";
 import { useCity } from "@/hooks/useCity";
 
 export default function Home() {
@@ -31,6 +32,7 @@ export default function Home() {
 
   return (
     <div className="home-page space-y-8 md:space-y-10">
+      <WelcomeTour role="customer" />
       <section className="home-hero relative isolate overflow-hidden rounded-[2rem] bg-[#073f36] px-5 py-6 text-white shadow-sm sm:px-8 sm:py-8 lg:px-10 lg:py-10">
         <div className="hero-orb hero-orb-one" aria-hidden="true" />
         <div className="hero-orb hero-orb-two" aria-hidden="true" />
