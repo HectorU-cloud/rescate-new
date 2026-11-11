@@ -19,6 +19,11 @@ export default function Cart() {
   const [phone, setPhone] = useState(user?.phone ?? "");
   const [deliveryCoords, setDeliveryCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [locating, setLocating] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  // La dirección sugerida por la ubicación se puede reemplazar sola, pero lo que el cliente escribe nunca se pisa.
+  const [suggested, setSuggested] = useState(false);
+  const suggestedRef = useRef(false);
+  const markSuggested = (value: boolean) => { suggestedRef.current = value; setSuggested(value); };
   const [addressLabel, setAddressLabel] = useState("Casa");
   // Los errores de los campos se muestran al intentar confirmar o al salir del campo.
   const [submitted, setSubmitted] = useState(false);
@@ -45,6 +50,26 @@ export default function Cart() {
 
   // Tarifa de servicio vigente: la fija el admin y el servidor cobra esta misma al confirmar.
   const fees = trpc.orders.fees.useQuery(undefined, { enabled: !!cart, retry: 1 });
+
+  const addressFromLocation = trpc.orders.addressFromLocation.useMutation();
+
+  // Con la ubicación ya guardada, intenta rellenar la dirección. Falla en silencio: el campo sigue editable.
+  async function suggestAddress(coords: { lat: number; lng: number }) {
+    setResolving(true);
+    try {
+      const { address: found } = await addressFromLocation.mutateAsync(coords);
+      const current = addressRef.current?.value ?? "";
+      if (found && (current.trim() === "" || suggestedRef.current)) {
+        setAddress(found);
+        markSuggested(true);
+        toast.success("Dirección sugerida según tu ubicación. Revísala y agrega una referencia.");
+      }
+    } catch {
+      // sin sugerencia: el cliente escribe su dirección
+    } finally {
+      setResolving(false);
+    }
+  }
 
   const createOrder = trpc.orders.createDelivery.useMutation({
     onSuccess: (data) => {
@@ -226,7 +251,7 @@ export default function Cart() {
             id="cart-address"
             ref={addressRef}
             value={address}
-            onChange={(e) => setAddress(e.target.value)}
+            onChange={(e) => { setAddress(e.target.value); markSuggested(false); }}
             onBlur={() => setTouched((t) => ({ ...t, address: true }))}
             placeholder="Dirección en Milagro (calle, número, referencia)"
             maxLength={300}
@@ -235,13 +260,16 @@ export default function Cart() {
             className={fieldClass(!!showError("address"))}
           />
           {errorText("cart-address-error", showError("address"))}
+          {suggested && !showError("address") && (
+            <p className="mt-1 text-[11px] font-semibold text-brand-dark">📍 Dirección sugerida según tu ubicación. Corrígela y agrega una referencia (color de la casa, cerca de…).</p>
+          )}
         </div>
         {isAuthenticated && (savedAddresses.data?.length ?? 0) > 0 && (
           <div className="space-y-2 rounded-2xl bg-secondary/60 p-3">
             <p className="text-xs font-extrabold">Mis direcciones guardadas</p>
             {savedAddresses.data!.map((saved) => (
               <div key={saved.id} className="flex items-center gap-2 rounded-xl bg-card p-3">
-                <button type="button" onClick={() => { setAddress(saved.address); setDeliveryCoords({ lat: saved.lat, lng: saved.lng }); }} className="min-w-0 flex-1 text-left">
+                <button type="button" onClick={() => { setAddress(saved.address); markSuggested(false); setDeliveryCoords({ lat: saved.lat, lng: saved.lng }); }} className="min-w-0 flex-1 text-left">
                   <span className="block text-sm font-extrabold">{saved.label}{saved.isDefault ? " · Principal" : ""}</span>
                   <span className="block truncate text-xs text-muted-foreground">{saved.address}</span>
                 </button>
@@ -254,7 +282,7 @@ export default function Cart() {
           ref={locationRef}
           type="button"
           aria-invalid={showError("location") ? true : undefined}
-          disabled={locating || !navigator.geolocation}
+          disabled={locating || resolving || !navigator.geolocation}
           onClick={() => {
             if (!navigator.geolocation) {
               toast.error("Este navegador no permite obtener tu ubicación");
@@ -263,9 +291,11 @@ export default function Cart() {
             setLocating(true);
             navigator.geolocation.getCurrentPosition(
               (position) => {
-                setDeliveryCoords({ lat: position.coords.latitude, lng: position.coords.longitude });
+                const coords = { lat: position.coords.latitude, lng: position.coords.longitude };
+                setDeliveryCoords(coords);
                 setLocating(false);
                 toast.success("Ubicación guardada");
+                void suggestAddress(coords);
               },
               (error) => {
                 setLocating(false);
@@ -276,7 +306,7 @@ export default function Cart() {
           }}
           className={`w-full rounded-xl border bg-brand-soft px-4 py-3 text-sm font-extrabold text-brand-dark disabled:opacity-50 ${showError("location") ? "border-destructive" : "border-brand/30"}`}
         >
-          {locating ? "Obteniendo ubicación…" : deliveryCoords ? "✓ Ubicación de entrega guardada" : "📍 Usar mi ubicación (necesaria para calcular el envío)"}
+          {locating ? "Obteniendo ubicación…" : resolving ? "Buscando tu dirección…" : deliveryCoords ? "✓ Ubicación de entrega guardada" : "📍 Usar mi ubicación (necesaria para calcular el envío)"}
         </button>
         {errorText("cart-location-error", showError("location"))}
         <p className="text-[11px] text-muted-foreground">

@@ -602,6 +602,23 @@ export const businessRouter = createRouter({
       return { id };
     }),
 
+  // Marca o desmarca los grupos de opciones (combo) de un producto que YA existe, sin tocar el resto de sus datos.
+  setProductOptionGroups: authedQuery
+    .input(z.object({
+      productId: z.number().int().positive(),
+      optionGroupIds: z.array(z.number().int().positive()).max(20),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      const product = await getDb().query.products.findFirst({
+        where: and(eq(products.id, input.productId), eq(products.businessId, biz.id)),
+      });
+      if (!product) throw new TRPCError({ code: "NOT_FOUND", message: "Ese producto ya no existe" });
+      await assertGroupsBelongToBusiness(biz.id, input.optionGroupIds);
+      await replaceProductOptionGroups(product.id, input.optionGroupIds);
+      return { optionGroupIds: [...new Set(input.optionGroupIds)] };
+    }),
+
   toggleProduct: authedQuery
     .input(z.object({ id: z.number(), isAvailable: z.boolean() }))
     .mutation(async ({ ctx, input }) => {

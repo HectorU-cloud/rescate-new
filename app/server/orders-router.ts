@@ -22,6 +22,8 @@ import { buildPricingSnapshot } from "@contracts/pricing";
 import { shouldShowCourier, toPublicCourier } from "./lib/courier-public";
 import { getDb } from "./queries/connection";
 import { MOBILE_HINT, normalizeEcuadorMobile } from "@contracts/phone";
+import { reverseGeocode } from "./lib/reverse-geocode";
+import { consume } from "./lib/rate-bucket";
 import {
   businesses,
   claims,
@@ -302,6 +304,16 @@ export const ordersRouter = createRouter({
 
   // Tarifa de servicio vigente (la que se cobrará al confirmar). Es pública para que el carrito la muestre siempre.
   fees: publicQuery.query(async () => ({ serviceFee: (await loadPricingConfig()).serviceFee })),
+
+  // Dirección sugerida para unas coordenadas (el cliente tocó «Usar mi ubicación»). Es solo una sugerencia:
+  // si no hay proveedor, el punto está fuera de la zona, se superó el límite o algo falla, devuelve null y el
+  // cliente escribe su dirección como siempre.
+  addressFromLocation: authedQuery
+    .input(z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }))
+    .mutation(async ({ ctx, input }) => {
+      if (!consume(`geocode:${ctx.user.id}`, 60 * 60 * 1000, 40).allowed) return { address: null };
+      return { address: (await reverseGeocode(input.lat, input.lng))?.address ?? null };
+    }),
 
   // Cotización de envío para mostrar en el carrito antes de confirmar.
   quote: authedQuery

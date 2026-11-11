@@ -17,6 +17,7 @@ import { computePackExpiry, describePackExpiry } from "@contracts/packs";
 import { compressProductImage, uploadCompressedImage } from "@/lib/product-image";
 import BusinessImageField from "@/components/BusinessImageField";
 import { PHONE_HINT, normalizeEcuadorPhone } from "@contracts/phone";
+import { parseNumberInput, rangeError } from "@contracts/number-input";
 import { describeOptions } from "@contracts/options";
 import OptionGroupsManager from "@/components/OptionGroupsManager";
 import {
@@ -69,7 +70,8 @@ export default function BusinessPanel() {
 // ---------------------------------------------------------------------------
 type SetupForm = {
   name: string; description: string; category: string; address: string; phone: string; emoji: string;
-  deliveryFee: number; deliveryMinutes: number; feePerKm: number; deliveryRadiusKm: number; minOrder: number;
+  // Los números se guardan como texto mientras se escriben para poder borrarlos por completo; se validan al enviar.
+  deliveryFee: string; deliveryMinutes: string; feePerKm: string; deliveryRadiusKm: string; minOrder: string;
   opensAt: string; closesAt: string;
 };
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -81,11 +83,17 @@ function validateSetup(form: SetupForm, loc: Point | null): Partial<Record<keyof
   if (form.address.trim().length < 5) errors.address = "Escribe la dirección con calle, número y una referencia.";
   if (!form.phone.trim()) errors.phone = "Escribe un teléfono de contacto.";
   else if (!normalizeEcuadorPhone(form.phone)) errors.phone = PHONE_HINT;
-  if (!(form.deliveryFee >= 0 && form.deliveryFee <= 20)) errors.deliveryFee = "Debe estar entre $0 y $20.";
-  if (!(form.deliveryMinutes >= 5 && form.deliveryMinutes <= 120)) errors.deliveryMinutes = "Debe estar entre 5 y 120 minutos.";
-  if (!(form.feePerKm >= 0 && form.feePerKm <= 5)) errors.feePerKm = "Debe estar entre $0 y $5 por km.";
-  if (!(form.deliveryRadiusKm >= 0.5 && form.deliveryRadiusKm <= BUSINESS_RULES.maxDeliveryRadiusKm)) errors.deliveryRadiusKm = `Debe estar entre 0,5 y ${BUSINESS_RULES.maxDeliveryRadiusKm} km.`;
-  if (!(form.minOrder >= 0 && form.minOrder <= 200)) errors.minOrder = "Debe estar entre $0 y $200.";
+  const ranges: Array<[keyof SetupForm, number, number, string]> = [
+    ["deliveryFee", 0, 20, "Debe estar entre $0 y $20."],
+    ["deliveryMinutes", 5, 120, "Debe estar entre 5 y 120 minutos."],
+    ["feePerKm", 0, 5, "Debe estar entre $0 y $5 por km."],
+    ["deliveryRadiusKm", 0.5, BUSINESS_RULES.maxDeliveryRadiusKm, `Debe estar entre 0,5 y ${BUSINESS_RULES.maxDeliveryRadiusKm} km.`],
+    ["minOrder", 0, 200, "Debe estar entre $0 y $200."],
+  ];
+  for (const [key, min, max, message] of ranges) {
+    const problem = rangeError(form[key], min, max, message);
+    if (problem) errors[key] = problem;
+  }
   if (!TIME_RE.test(form.opensAt)) errors.opensAt = "Elige la hora de apertura.";
   if (!TIME_RE.test(form.closesAt)) errors.closesAt = "Elige la hora de cierre.";
   if (!loc) errors.location = "Marca la ubicación de tu local en el mapa.";
@@ -103,11 +111,11 @@ function BusinessSetup() {
     address: "",
     phone: "",
     emoji: "🍽️",
-    deliveryFee: 1,
-    deliveryMinutes: 30,
-    feePerKm: 0.25,
-    deliveryRadiusKm: 5,
-    minOrder: 0,
+    deliveryFee: "1",
+    deliveryMinutes: "30",
+    feePerKm: "0.25",
+    deliveryRadiusKm: "5",
+    minOrder: "0",
     opensAt: "08:00",
     closesAt: "22:00",
   });
@@ -136,6 +144,11 @@ function BusinessSetup() {
     try {
       const result = await save.mutateAsync({
         ...form,
+        deliveryFee: parseNumberInput(form.deliveryFee),
+        deliveryMinutes: parseNumberInput(form.deliveryMinutes),
+        feePerKm: parseNumberInput(form.feePerKm),
+        deliveryRadiusKm: parseNumberInput(form.deliveryRadiusKm),
+        minOrder: parseNumberInput(form.minOrder),
         name: form.name.trim(),
         address: form.address.trim(),
         description: form.description.trim() || undefined,
@@ -180,15 +193,10 @@ function BusinessSetup() {
         </span>
         <input
           {...inputProps}
-          value={form[key] as string | number}
+          value={form[key]}
           aria-invalid={message ? true : undefined}
           onBlur={() => setTouched((t) => ({ ...t, [key]: true }))}
-          onChange={(e) =>
-            setForm((f) => ({
-              ...f,
-              [key]: props.type === "number" ? Number(e.target.value) : e.target.value,
-            }))
-          }
+          onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
           className={inputClass(!!message)}
         />
         {errorText(message)}
@@ -527,14 +535,27 @@ function DeliveryRulesCard({
   business: { deliveryFee: number; feePerKm: number; deliveryRadiusKm: number; minOrder: number; opensAt: string; closesAt: string };
 }) {
   const utils = trpc.useUtils();
+  // Los números se editan como texto (así se pueden borrar por completo) y se validan al guardar.
   const [form, setForm] = useState({
-    deliveryFee: business.deliveryFee,
-    feePerKm: business.feePerKm,
-    deliveryRadiusKm: business.deliveryRadiusKm,
-    minOrder: business.minOrder,
+    deliveryFee: String(business.deliveryFee),
+    feePerKm: String(business.feePerKm),
+    deliveryRadiusKm: String(business.deliveryRadiusKm),
+    minOrder: String(business.minOrder),
     opensAt: business.opensAt,
     closesAt: business.closesAt,
   });
+  const [tried, setTried] = useState(false);
+  const ruleRanges = {
+    deliveryFee: [0, 20, "Debe estar entre $0 y $20."],
+    feePerKm: [0, 5, "Debe estar entre $0 y $5 por km."],
+    deliveryRadiusKm: [0.5, BUSINESS_RULES.maxDeliveryRadiusKm, `Debe estar entre 0,5 y ${BUSINESS_RULES.maxDeliveryRadiusKm} km.`],
+    minOrder: [0, 200, "Debe estar entre $0 y $200."],
+  } as const;
+  const ruleErrors = Object.fromEntries(
+    (Object.keys(ruleRanges) as Array<keyof typeof ruleRanges>).map((k) => [k, rangeError(form[k], ruleRanges[k][0], ruleRanges[k][1], ruleRanges[k][2])]),
+  ) as Record<keyof typeof ruleRanges, string | null>;
+  const timeInvalid = !TIME_RE.test(form.opensAt) || !TIME_RE.test(form.closesAt);
+  const hasRuleErrors = Object.values(ruleErrors).some(Boolean) || timeInvalid;
   const save = trpc.business.updateRules.useMutation({
     onSuccess: () => {
       toast.success("Reglas de entrega guardadas");
@@ -551,9 +572,11 @@ function DeliveryRulesCard({
         min={0}
         step={step}
         value={form[key]}
-        onChange={(e) => setForm((f) => ({ ...f, [key]: Number(e.target.value) }))}
-        className="w-full rounded-xl border border-input bg-background px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring"
+        aria-invalid={tried && ruleErrors[key] ? true : undefined}
+        onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+        className={`w-full rounded-xl border bg-background px-3 py-2 text-sm font-semibold outline-none focus:ring-2 focus:ring-ring ${tried && ruleErrors[key] ? "border-destructive" : "border-input"}`}
       />
+      {tried && ruleErrors[key] && <span role="alert" className="mt-1 block text-xs font-bold text-destructive">{ruleErrors[key]}</span>}
     </label>
   );
   const time = (label: string, key: "opensAt" | "closesAt") => (
@@ -586,7 +609,18 @@ function DeliveryRulesCard({
       </p>
       <button
         disabled={save.isPending}
-        onClick={() => save.mutate(form)}
+        onClick={() => {
+          setTried(true);
+          if (hasRuleErrors) { toast.error("Revisa los campos marcados en rojo."); return; }
+          save.mutate({
+            deliveryFee: parseNumberInput(form.deliveryFee),
+            feePerKm: parseNumberInput(form.feePerKm),
+            deliveryRadiusKm: parseNumberInput(form.deliveryRadiusKm),
+            minOrder: parseNumberInput(form.minOrder),
+            opensAt: form.opensAt,
+            closesAt: form.closesAt,
+          });
+        }}
         className="mt-3 w-full rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
       >
         {save.isPending ? "Guardando…" : "Guardar reglas"}
@@ -885,6 +919,15 @@ function MenuTab() {
     },
     onError: (e) => toast.error(e.message),
   });
+  // Marcar un grupo en un producto YA guardado se guarda al instante (no depende del formulario de arriba).
+  const setGroups = trpc.business.setProductOptionGroups.useMutation({
+    onSuccess: () => {
+      utils.business.products.invalidate();
+      utils.catalog.invalidate();
+      toast.success("Combo actualizado");
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const toggle = trpc.business.toggleProduct.useMutation({
     onSuccess: () => {
       utils.business.products.invalidate();
@@ -933,6 +976,11 @@ function MenuTab() {
         />
         <div className="space-y-2 rounded-2xl border border-dashed border-input p-3">
           <label className="block text-sm font-bold">Opciones del producto (combo)</label>
+          <p className="text-xs text-muted-foreground">
+            {editingId !== null
+              ? "Lo que marques aquí se guarda al pulsar «Guardar cambios»."
+              : "Lo que marques aquí se guarda junto con el producto al pulsar «Agregar al menú». Para un producto que ya está en el menú, usa «🧩 Opciones de combo» en su tarjeta, más abajo."}
+          </p>
           {(optionGroups.data ?? []).length === 0 ? (
             <p className="text-xs text-muted-foreground">
               Para que el cliente pueda elegir sabor, tamaño o extras, primero crea un grupo en «Opciones de combos» (más abajo) y luego márcalo aquí.
@@ -992,6 +1040,11 @@ function MenuTab() {
             </div>
           )}
         </div>
+        {(form.name.trim().length < 2 || !(Number(form.price) > 0)) && (
+          <p className="text-center text-xs font-bold text-muted-foreground">
+            Para guardar falta: {[form.name.trim().length < 2 ? "el nombre" : null, !(Number(form.price) > 0) ? "el precio" : null].filter(Boolean).join(" y ")}.
+          </p>
+        )}
         <button
           disabled={add.isPending || imageBusy || form.name.trim().length < 2 || Number(form.price) <= 0}
           onClick={() => add.mutate({
@@ -1015,7 +1068,8 @@ function MenuTab() {
       <OptionGroupsManager />
 
       {(list.data ?? []).map((p) => (
-        <div key={p.id} className="flex items-center gap-3 rounded-2xl bg-card p-3 ring-1 ring-border">
+        <div key={p.id} className="rounded-2xl bg-card p-3 ring-1 ring-border">
+          <div className="flex items-center gap-3">
           {p.imageUrl ? (
             <img src={p.imageUrl} alt={p.name} className="h-14 w-14 shrink-0 rounded-xl object-cover" />
           ) : (
@@ -1045,6 +1099,35 @@ function MenuTab() {
           >
             {p.isAvailable ? "Disponible" : "Agotado"}
           </button>
+                  </div>
+          <details className="mt-2 rounded-xl bg-secondary/50 px-3 py-2">
+            <summary className="cursor-pointer text-xs font-extrabold">
+              🧩 Opciones de combo{p.optionGroupIds.length > 0 ? ` · ${p.optionGroupIds.length} marcada${p.optionGroupIds.length === 1 ? "" : "s"}` : " · ninguna"}
+            </summary>
+            {(optionGroups.data ?? []).length === 0 ? (
+              <p className="mt-2 text-xs text-muted-foreground">Primero crea un grupo en «Opciones de combos» (más abajo) y luego márcalo aquí.</p>
+            ) : (
+              <div className="mt-2 space-y-1.5">
+                {(optionGroups.data ?? []).map((g) => (
+                  <label key={g.id} className="flex items-center gap-2 text-sm font-semibold">
+                    <input
+                      type="checkbox"
+                      disabled={setGroups.isPending}
+                      checked={p.optionGroupIds.includes(g.id)}
+                      onChange={(e) => setGroups.mutate({
+                        productId: p.id,
+                        optionGroupIds: e.target.checked ? [...p.optionGroupIds, g.id] : p.optionGroupIds.filter((id) => id !== g.id),
+                      })}
+                      className="h-4 w-4 accent-brand"
+                    />
+                    <span>{g.name}</span>
+                    <span className="text-xs font-bold text-muted-foreground">{g.minSelect > 0 ? "obligatorio" : "opcional"} · {g.choices.length} opcion{g.choices.length === 1 ? "" : "es"}</span>
+                  </label>
+                ))}
+                <p className="text-[11px] text-muted-foreground">Se guarda al marcar. Los clientes lo ven al abrir el local.</p>
+              </div>
+            )}
+          </details>
         </div>
       ))}
     </div>

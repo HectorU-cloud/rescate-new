@@ -215,4 +215,34 @@ describe.skipIf(!enabled)("tarifas configurables y desglose del precio (MySQL re
     expect(saved.phone).toBe("042123456");
     expect(saved.imageUrl).toBeNull();
   });
+
+  it("las opciones de combo se marcan en un producto ya guardado y quedan guardadas", async () => {
+    const owner = await mkUser("business");
+    const [{ id: businessId }] = await db.insert(S.businesses).values({
+      ownerId: owner.id, name: `${tag} combos`, category: "test", address: "Calle 1", lat: -2.134, lng: -79.594,
+      approvalStatus: "approved", locationConfirmed: true,
+    }).$returningId();
+    created.businesses.push(businessId);
+    const [{ id: productId }] = await db.insert(S.products).values({ businessId, name: `${tag} hamburguesa`, price: 3 }).$returningId();
+    created.products.push(productId);
+    const c = callerFor(owner);
+    const { id: groupId } = await c.business.upsertOptionGroup({
+      name: "Sabor de la cola", minSelect: 1, maxSelect: 1,
+      choices: [{ name: "Coca-Cola", priceDelta: 0, isAvailable: true }, { name: "Fanta", priceDelta: 0, isAvailable: true }],
+    });
+    const marked = async () => (await c.business.products()).find((p) => p.id === productId)?.optionGroupIds;
+
+    await c.business.setProductOptionGroups({ productId, optionGroupIds: [groupId] });
+    expect(await marked()).toEqual([groupId]);
+
+    // Otro dueño no puede tocar ese producto.
+    const stranger = await mkUser("business");
+    const denied = await failure(callerFor(stranger).business.setProductOptionGroups({ productId, optionGroupIds: [] }));
+    expect(denied.code).toBe("PRECONDITION_FAILED");
+    expect(await marked()).toEqual([groupId]);
+
+    await c.business.setProductOptionGroups({ productId, optionGroupIds: [] });
+    expect(await marked()).toEqual([]);
+    await c.business.deleteOptionGroup({ id: groupId });
+  });
 });
