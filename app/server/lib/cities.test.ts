@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BUSINESS_RULES, MILAGRO } from "@contracts/constants";
-import { CITIES, cityById, cityIdForPoint, cityLabel, detectCity, nearestCity } from "@contracts/cities";
+import { CITIES, cityById, cityIdForPoint, cityLabel, cityViewbox, detectCity, mentionsKnownCity, nearestCity } from "@contracts/cities";
 import { distanceMeters, isInServiceArea } from "@contracts/geo";
 
 const city = (id: string) => cityById(id)!;
@@ -130,5 +130,33 @@ describe("cityIdForPoint (a qué ciudad pertenece un local)", () => {
   });
   it("es consistente: dos locales en el mismo punto van a la misma ciudad", () => {
     expect(cityIdForPoint(-2.15, -79.7)).toBe(cityIdForPoint(-2.15, -79.7));
+  });
+});
+
+describe("mentionsKnownCity", () => {
+  it("reconoce una ciudad escrita en el texto, sin importar tildes ni mayúsculas", () => {
+    expect(mentionsKnownCity("Av. Quito y Calle 5, Guayaquil")).toBe(true);
+    expect(mentionsKnownCity("barrio centro, DURAN")).toBe(true);
+    expect(mentionsKnownCity("Calle Bolívar, Durán")).toBe(true);
+  });
+  it("sin ciudad (o con una que no atendemos) devuelve false", () => {
+    expect(mentionsKnownCity("Calle Bolívar y Rocafuerte")).toBe(false);
+    expect(mentionsKnownCity("Av. Amazonas, Quito")).toBe(false);
+    expect(mentionsKnownCity("")).toBe(false);
+  });
+  it("compara por palabra completa: «Milagrosa» no cuenta como Milagro", () => {
+    expect(mentionsKnownCity("Calle La Milagrosa 123")).toBe(false);
+  });
+});
+
+describe("cityViewbox", () => {
+  it("rodea el centro de la ciudad", () => {
+    for (const c of CITIES) {
+      const box = cityViewbox(c);
+      expect(box.west).toBeLessThan(c.lng);
+      expect(box.east).toBeGreaterThan(c.lng);
+      expect(box.south).toBeLessThan(c.lat);
+      expect(box.north).toBeGreaterThan(c.lat);
+    }
   });
 });

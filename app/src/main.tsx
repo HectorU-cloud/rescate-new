@@ -10,6 +10,7 @@ import { Toaster } from "@/components/ui/sonner"
 import App from './App.tsx'
 import ErrorBoundary from "@/components/ErrorBoundary"
 import { initMonitoring } from "@/lib/monitoring"
+import { hideSplash } from "@/lib/splash"
 
 initMonitoring()
 
@@ -31,3 +32,5 @@ createRoot(document.getElementById('root')!).render(
     </BrowserRouter>
   </StrictMode>,
 )
+
+hideSplash()

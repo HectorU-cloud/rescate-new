@@ -1,5 +1,5 @@
 import { WEATHER_LABEL } from "@contracts/pricing";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
@@ -8,6 +8,10 @@ import { money } from "@/lib/format";
 import { describeOptions } from "@contracts/options";
 import { MOBILE_HINT, normalizeEcuadorMobile } from "@contracts/phone";
 import { toast } from "sonner";
+import { DeliveryMap } from "@/components/DeliveryMap";
+import { useCity } from "@/hooks/useCity";
+
+type AddressMatch = { label: string; lat: number; lng: number };
 
 export default function Cart() {
   const { cart, subtotal, setQty, remove, clear } = useCart();
@@ -27,8 +31,21 @@ export default function Cart() {
   const [addressLabel, setAddressLabel] = useState("Casa");
   // Los errores de los campos se muestran al intentar confirmar o al salir del campo.
   const [submitted, setSubmitted] = useState(false);
-  const [touched, setTouched] = useState<{ address?: boolean; phone?: boolean }>({});
+  const [touched, setTouched] = useState<{ name?: boolean; address?: boolean; phone?: boolean }>({});
+  const nameRef = useRef<HTMLInputElement>(null);
   const addressRef = useRef<HTMLInputElement>(null);
+  // ¿Es para mí o para otra persona que está en otra dirección?
+  const [recipient, setRecipient] = useState<"me" | "other">("me");
+  const [recipientName, setRecipientName] = useState("");
+  const [recipientPhone, setRecipientPhone] = useState("");
+  const [matches, setMatches] = useState<AddressMatch[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchHint, setSearchHint] = useState<string | null>(null);
+  // Texto ya buscado (o puesto por código): evita buscar dos veces lo mismo.
+  const lastSearchedRef = useRef("");
+  // Si el cliente movió el pin a mano, seguir escribiendo la dirección ya no lo mueve de vuelta.
+  const pinLockedRef = useRef(false);
+  const { city } = useCity();
   const locationRef = useRef<HTMLButtonElement>(null);
   const phoneRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
@@ -60,6 +77,7 @@ export default function Cart() {
       const { address: found } = await addressFromLocation.mutateAsync(coords);
       const current = addressRef.current?.value ?? "";
       if (found && (current.trim() === "" || suggestedRef.current)) {
+        lastSearchedRef.current = found.trim();
         setAddress(found);
         markSuggested(true);
         toast.success("Dirección sugerida según tu ubicación. Revísala y agrega una referencia.");
@@ -69,6 +87,73 @@ export default function Cart() {
     } finally {
       setResolving(false);
     }
+  }
+
+  const searchAddressMutation = trpc.orders.searchAddress.useMutation();
+
+  // Dirección escrita → pin en el mapa. El texto va tal cual; la ciudad elegida solo sesga la búsqueda en el servidor.
+  async function findOnMap(text: string) {
+    lastSearchedRef.current = text;
+    setSearching(true);
+    setSearchHint(null);
+    try {
+      const res = await searchAddressMutation.mutateAsync({ query: text, cityId: city?.id });
+      // Si siguió escribiendo mientras buscábamos, este resultado ya no corresponde: manda el texto nuevo.
+      if ((addressRef.current?.value ?? "").trim() !== text) return;
+      if (res.status === "limited") {
+        setMatches([]);
+        setSearchHint("Hiciste muchas búsquedas seguidas. Toca el mapa para marcar el punto.");
+      } else if (res.status === "unavailable") {
+        setMatches([]);
+        setSearchHint("No pudimos buscar la dirección ahora. Toca el mapa para marcar el punto.");
+      } else if (res.results.length === 0) {
+        setMatches([]);
+        setSearchHint("No encontramos esa dirección en nuestras ciudades. Agrégale la ciudad o toca el mapa para marcar el punto.");
+      } else {
+        pinLockedRef.current = false;
+        setDeliveryCoords({ lat: res.results[0].lat, lng: res.results[0].lng });
+        setMatches(res.results.length > 1 ? res.results : []);
+        setSearchHint("📍 Ubicamos la dirección en el mapa. Verifica el pin y arrástralo si hace falta.");
+      }
+    } catch {
+      setSearchHint("No pudimos buscar la dirección. Toca el mapa para marcar el punto.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  // Pidiendo para otra persona, el mapa se actualiza solo poco después de dejar de escribir.
+  useEffect(() => {
+    if (recipient !== "other" || fulfillmentMethod !== "delivery" || !isAuthenticated) return;
+    const text = address.trim();
+    if (suggestedRef.current || pinLockedRef.current || text.length < 8 || text === lastSearchedRef.current) return;
+    const timer = setTimeout(() => { void findOnMap(text); }, 1200);
+    return () => clearTimeout(timer);
+    // findOnMap lee lo vigente al ejecutarse: el efecto solo debe reaccionar al texto y al modo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, recipient, fulfillmentMethod, isAuthenticated, suggested]);
+
+  function chooseRecipient(next: "me" | "other") {
+    if (next === recipient) return;
+    setRecipient(next);
+    // El punto y la dirección eran de otra persona (o de uno mismo): se empieza de cero para no entregar donde no es.
+    setDeliveryCoords(null);
+    setAddress("");
+    markSuggested(false);
+    setAddressLabel(next === "other" ? "" : "Casa");
+    setMatches([]);
+    setSearchHint(null);
+    pinLockedRef.current = false;
+    lastSearchedRef.current = "";
+  }
+
+  // El cliente tocó el mapa o movió el pin: es una decisión suya y se respeta.
+  function pickOnMap(point: { lat: number; lng: number }) {
+    pinLockedRef.current = true;
+    setMatches([]);
+    setSearchHint(null);
+    setDeliveryCoords(point);
+    void suggestAddress(point); // solo rellena si la dirección está vacía o era una sugerencia
   }
 
   const createOrder = trpc.orders.createDelivery.useMutation({
@@ -111,13 +196,16 @@ export default function Cart() {
   const belowMin = !!q && subtotal < q.minOrder;
   // Campos que el cliente debe completar: se explican junto al campo y no bloquean el botón en silencio.
   const isDelivery = fulfillmentMethod === "delivery";
+  const forOther = isDelivery && recipient === "other";
+  const activePhone = forOther ? recipientPhone : phone;
   const fieldErrors = {
+    name: forOther && recipientName.trim().length < 2 ? "Escribe el nombre de quien recibe." : null,
     address: isDelivery && address.trim().length < 5 ? "Escribe tu dirección (calle, número y referencia), mínimo 5 caracteres." : null,
-    location: isDelivery && !deliveryCoords ? "Toca «Usar mi ubicación» para calcular el envío." : null,
-    phone: !phone.trim() ? "Escribe tu celular para que podamos coordinar la entrega." : normalizeEcuadorMobile(phone) === null ? MOBILE_HINT : null,
+    location: isDelivery && !deliveryCoords ? (forOther ? "Busca la dirección o toca el mapa para calcular el envío." : "Toca «Usar mi ubicación» para calcular el envío.") : null,
+    phone: !activePhone.trim() ? (forOther ? "Escribe el celular de quien recibe para que el repartidor pueda avisarle." : "Escribe tu celular para que podamos coordinar la entrega.") : normalizeEcuadorMobile(activePhone) === null ? MOBILE_HINT : null,
   };
   const hasFieldErrors = Object.values(fieldErrors).some(Boolean);
-  const showError = (key: "address" | "location" | "phone") => ((submitted || (key !== "location" && touched[key])) ? fieldErrors[key] : null);
+  const showError = (key: "name" | "address" | "location" | "phone") => ((submitted || (key !== "location" && touched[key])) ? fieldErrors[key] : null);
 
   // Lo que impide confirmar y no depende de lo que escriba el cliente (tarifas, ruta, horario, mínimo).
   const blockReason = serviceFee === null
@@ -143,18 +231,20 @@ export default function Cart() {
     setSubmitted(true);
     if (hasFieldErrors) {
       toast.error("Revisa los campos marcados en rojo.");
-      const first = fieldErrors.address ? addressRef.current : fieldErrors.location ? locationRef.current : phoneRef.current;
+      const first = fieldErrors.name ? nameRef.current : fieldErrors.address ? addressRef.current : fieldErrors.location ? locationRef.current : phoneRef.current;
       first?.scrollIntoView({ behavior: "smooth", block: "center" });
       first?.focus({ preventScroll: true });
       return;
     }
+    // El pedido guarda quién cobra (la cuenta); a quién se le entrega va en la nota que ven el local y el repartidor.
+    const finalNotes = [forOther ? `Entregar a: ${recipientName.trim()}` : null, notes.trim() || null].filter(Boolean).join(" · ").slice(0, 300);
     createOrder.mutate({
       businessId: cart!.businessId,
       items: cart!.items.map((i) => ({ productId: i.productId, quantity: i.quantity, options: i.options.map((o) => o.choiceId) })),
       fulfillmentMethod,
       ...(isDelivery ? { deliveryAddress: address.trim(), deliveryLat: deliveryCoords!.lat, deliveryLng: deliveryCoords!.lng } : {}),
-      notes: notes.trim() || undefined,
-      customerPhone: normalizeEcuadorMobile(phone) ?? undefined,
+      notes: finalNotes || undefined,
+      customerPhone: normalizeEcuadorMobile(activePhone) ?? undefined,
       ...(isDelivery && q ? { expectedDeliveryFee: q.fee } : {}),
     });
   }
@@ -245,6 +335,28 @@ export default function Cart() {
           <button type="button" onClick={() => { setFulfillmentMethod("pickup"); setDeliveryCoords(null); }} className={`rounded-xl px-3 py-3 text-sm font-extrabold ${fulfillmentMethod === "pickup" ? "bg-card text-brand shadow-sm" : "text-muted-foreground"}`}>🏪 Retirar en local</button>
         </div>
         {fulfillmentMethod === "delivery" ? <>
+        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary p-1" role="group" aria-label="¿Para quién es el pedido?">
+          <button type="button" aria-pressed={recipient === "me"} onClick={() => chooseRecipient("me")} className={`rounded-xl px-3 py-3 text-sm font-extrabold ${recipient === "me" ? "bg-card text-brand shadow-sm" : "text-muted-foreground"}`}>🙋 Para mí</button>
+          <button type="button" aria-pressed={recipient === "other"} onClick={() => chooseRecipient("other")} className={`rounded-xl px-3 py-3 text-sm font-extrabold ${recipient === "other" ? "bg-card text-brand shadow-sm" : "text-muted-foreground"}`}>🎁 Para otra persona</button>
+        </div>
+        {recipient === "other" && (
+          <div>
+            <label htmlFor="cart-recipient-name" className="mb-1 block text-xs font-extrabold text-muted-foreground">Nombre de quien recibe <span className="text-destructive">*</span></label>
+            <input
+              id="cart-recipient-name"
+              ref={nameRef}
+              value={recipientName}
+              onChange={(e) => setRecipientName(e.target.value)}
+              onBlur={() => setTouched((t) => ({ ...t, name: true }))}
+              placeholder="Ej. María"
+              maxLength={60}
+              aria-invalid={showError("name") ? true : undefined}
+              aria-describedby={showError("name") ? "cart-recipient-name-error" : undefined}
+              className={fieldClass(!!showError("name"))}
+            />
+            {errorText("cart-recipient-name-error", showError("name"))}
+          </div>
+        )}
         <div>
           <label htmlFor="cart-address" className="mb-1 block text-xs font-extrabold text-muted-foreground">Dirección de entrega <span className="text-destructive">*</span></label>
           <input
@@ -253,7 +365,7 @@ export default function Cart() {
             value={address}
             onChange={(e) => { setAddress(e.target.value); markSuggested(false); }}
             onBlur={() => setTouched((t) => ({ ...t, address: true }))}
-            placeholder="Dirección en Milagro (calle, número, referencia)"
+            placeholder={recipient === "other" ? "Dirección de quien recibe (calle, número, referencia y ciudad)" : city ? `Dirección en ${city.name} (calle, número, referencia)` : "Dirección (calle, número, referencia)"}
             maxLength={300}
             aria-invalid={showError("address") ? true : undefined}
             aria-describedby={showError("address") ? "cart-address-error" : undefined}
@@ -264,12 +376,45 @@ export default function Cart() {
             <p className="mt-1 text-[11px] font-semibold text-brand-dark">📍 Dirección sugerida según tu ubicación. Corrígela y agrega una referencia (color de la casa, cerca de…).</p>
           )}
         </div>
+        {recipient === "other" && (
+          <div className="space-y-2">
+            <button
+              ref={locationRef}
+              type="button"
+              aria-invalid={showError("location") ? true : undefined}
+              disabled={searching || address.trim().length < 4 || !isAuthenticated}
+              onClick={() => { pinLockedRef.current = false; void findOnMap(address.trim()); }}
+              className={`w-full rounded-xl border bg-brand-soft px-4 py-3 text-sm font-extrabold text-brand-dark disabled:opacity-50 ${showError("location") ? "border-destructive" : "border-brand/30"}`}
+            >
+              {searching ? "Buscando en el mapa…" : deliveryCoords ? "🔎 Buscar de nuevo esta dirección" : "🔎 Buscar esta dirección en el mapa"}
+            </button>
+            {searchHint && <p className="text-xs font-bold text-brand-dark">{searchHint}</p>}
+            {matches.length > 1 && (
+              <ul className="space-y-1 rounded-2xl bg-secondary/60 p-2">
+                <li className="px-2 text-[11px] font-extrabold text-muted-foreground">¿Es alguna de estas?</li>
+                {matches.map((m) => (
+                  <li key={`${m.label}-${m.lat}-${m.lng}`}>
+                    <button
+                      type="button"
+                      onClick={() => { pinLockedRef.current = false; setDeliveryCoords({ lat: m.lat, lng: m.lng }); }}
+                      className={`w-full rounded-xl bg-card px-3 py-2 text-left text-xs font-bold ${deliveryCoords?.lat === m.lat && deliveryCoords?.lng === m.lng ? "ring-2 ring-brand" : ""}`}
+                    >
+                      {m.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <DeliveryMap value={deliveryCoords} onPick={pickOnMap} />
+            <p className="text-[11px] text-muted-foreground">Escribe la dirección y el mapa se actualiza solo, o toca el mapa / arrastra el pin hasta la puerta de quien recibe.</p>
+          </div>
+        )}
         {isAuthenticated && (savedAddresses.data?.length ?? 0) > 0 && (
           <div className="space-y-2 rounded-2xl bg-secondary/60 p-3">
             <p className="text-xs font-extrabold">Mis direcciones guardadas</p>
             {savedAddresses.data!.map((saved) => (
               <div key={saved.id} className="flex items-center gap-2 rounded-xl bg-card p-3">
-                <button type="button" onClick={() => { setAddress(saved.address); markSuggested(false); setDeliveryCoords({ lat: saved.lat, lng: saved.lng }); }} className="min-w-0 flex-1 text-left">
+                <button type="button" onClick={() => { lastSearchedRef.current = saved.address.trim(); pinLockedRef.current = true; setMatches([]); setSearchHint(null); setAddress(saved.address); markSuggested(false); setDeliveryCoords({ lat: saved.lat, lng: saved.lng }); }} className="min-w-0 flex-1 text-left">
                   <span className="block text-sm font-extrabold">{saved.label}{saved.isDefault ? " · Principal" : ""}</span>
                   <span className="block truncate text-xs text-muted-foreground">{saved.address}</span>
                 </button>
@@ -278,7 +423,7 @@ export default function Cart() {
             ))}
           </div>
         )}
-        <button
+        {recipient === "me" && <button
           ref={locationRef}
           type="button"
           aria-invalid={showError("location") ? true : undefined}
@@ -307,7 +452,7 @@ export default function Cart() {
           className={`w-full rounded-xl border bg-brand-soft px-4 py-3 text-sm font-extrabold text-brand-dark disabled:opacity-50 ${showError("location") ? "border-destructive" : "border-brand/30"}`}
         >
           {locating ? "Obteniendo ubicación…" : resolving ? "Buscando tu dirección…" : deliveryCoords ? "✓ Ubicación de entrega guardada" : "📍 Usar mi ubicación (necesaria para calcular el envío)"}
-        </button>
+        </button>}
         {errorText("cart-location-error", showError("location"))}
         <p className="text-[11px] text-muted-foreground">
           La ubicación se usa para calcular la distancia, el costo de envío y la llegada estimada. Verifica que coincida con la dirección escrita.
@@ -322,17 +467,17 @@ export default function Cart() {
         )}
         </> : <div className="rounded-2xl bg-brand-soft p-4 text-sm font-semibold text-brand-dark">🏪 Recogerás tu pedido directamente en <strong>{cart.businessName}</strong>. No se asignará repartidor ni se cobrará envío. Revisa el horario del local antes de confirmar.</div>}
         <div>
-          <label htmlFor="cart-phone" className="mb-1 block text-xs font-extrabold text-muted-foreground">Tu celular <span className="text-destructive">*</span></label>
+          <label htmlFor="cart-phone" className="mb-1 block text-xs font-extrabold text-muted-foreground">{forOther ? "Celular de quien recibe" : "Tu celular"} <span className="text-destructive">*</span></label>
           <input
             id="cart-phone"
             ref={phoneRef}
             type="tel"
             inputMode="tel"
             autoComplete="tel"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            value={forOther ? recipientPhone : phone}
+            onChange={(e) => (forOther ? setRecipientPhone(e.target.value) : setPhone(e.target.value))}
             onBlur={() => setTouched((t) => ({ ...t, phone: true }))}
-            placeholder="Ej. 0991234567 (para coordinar la entrega)"
+            placeholder={forOther ? "Ej. 0991234567 (para avisarle cuando llegue)" : "Ej. 0991234567 (para coordinar la entrega)"}
             maxLength={20}
             aria-invalid={showError("phone") ? true : undefined}
             aria-describedby={showError("phone") ? "cart-phone-error" : undefined}
@@ -347,7 +492,7 @@ export default function Cart() {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Sin cebolla, extra ají…"
-            maxLength={300}
+            maxLength={forOther ? 220 : 300}
             className={fieldClass(false)}
           />
         </div>

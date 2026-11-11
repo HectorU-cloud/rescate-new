@@ -22,7 +22,7 @@ import { buildPricingSnapshot } from "@contracts/pricing";
 import { shouldShowCourier, toPublicCourier } from "./lib/courier-public";
 import { getDb } from "./queries/connection";
 import { MOBILE_HINT, normalizeEcuadorMobile } from "@contracts/phone";
-import { reverseGeocode } from "./lib/reverse-geocode";
+import { reverseGeocode, searchAddress } from "./lib/reverse-geocode";
 import { consume } from "./lib/rate-bucket";
 import {
   businesses,
@@ -313,6 +313,16 @@ export const ordersRouter = createRouter({
     .mutation(async ({ ctx, input }) => {
       if (!consume(`geocode:${ctx.user.id}`, 60 * 60 * 1000, 40).allowed) return { address: null };
       return { address: (await reverseGeocode(input.lat, input.lng))?.address ?? null };
+    }),
+
+  // Dirección escrita → puntos en el mapa (pedir para otra persona). Solo sugiere: si no hay proveedor, se superó el
+  // límite o algo falla, el cliente marca el punto tocando el mapa. `cityId` solo sesga la búsqueda; nunca cambia el texto.
+  searchAddress: authedQuery
+    .input(z.object({ query: z.string().trim().min(4).max(200), cityId: z.string().max(40).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!consume(`geocode-search:${ctx.user.id}`, 60 * 60 * 1000, 80).allowed) return { status: "limited" as const, results: [] };
+      const results = await searchAddress(input.query, input.cityId);
+      return results ? { status: "ok" as const, results } : { status: "unavailable" as const, results: [] };
     }),
 
   // Cotización de envío para mostrar en el carrito antes de confirmar.

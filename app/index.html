@@ -22,8 +22,59 @@
       href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap"
       rel="stylesheet"
     />
+    <style>
+      /* Pantalla de carga: se ve desde el primer instante (antes de que cargue el JavaScript) y main.tsx la quita. */
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: env(safe-area-inset-top, 0px) 24px env(safe-area-inset-bottom, 0px);
+        /* El centro es el mismo verde del manifest: así el paso desde la pantalla de inicio del teléfono no parpadea. */
+        background: #00a651 radial-gradient(circle at 50% 40%, #00a651 0%, #00a651 38%, #008a43 100%);
+        color: #fff;
+        font-family: "Baloo 2", "Nunito", system-ui, sans-serif;
+        text-align: center;
+        opacity: 1;
+        transition: opacity 0.35s ease, visibility 0s linear 0s;
+      }
+      #splash.splash-hide { opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.35s ease, visibility 0s linear 0.35s; }
+      #splash .splash-logo {
+        width: 112px;
+        height: 112px;
+        border-radius: 26%;
+        box-shadow: 0 14px 40px rgba(0, 0, 0, 0.3), 0 0 0 4px rgba(255, 255, 255, 0.18);
+        animation: splash-pop 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+      #splash .splash-name { margin: 22px 0 0; font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: -0.01em; animation: splash-rise 0.6s 0.15s ease both; }
+      #splash .splash-tag { margin: 10px 0 0; max-width: 280px; font-size: 16px; font-weight: 600; line-height: 1.3; opacity: 0.92; animation: splash-rise 0.6s 0.3s ease both; }
+      #splash .splash-dots { position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 48px); display: flex; gap: 8px; }
+      #splash .splash-dots span { width: 9px; height: 9px; border-radius: 9999px; background: #fff; opacity: 0.35; animation: splash-dot 1.1s ease-in-out infinite; }
+      #splash .splash-dots span:nth-child(2) { animation-delay: 0.18s; }
+      #splash .splash-dots span:nth-child(3) { animation-delay: 0.36s; }
+      @keyframes splash-pop { from { opacity: 0; transform: scale(0.82); } to { opacity: 1; transform: scale(1); } }
+      @keyframes splash-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      @keyframes splash-dot { 0%, 100% { opacity: 0.35; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-5px); } }
+      @media (prefers-reduced-motion: reduce) {
+        #splash, #splash * { animation: none !important; transition: none !important; }
+      }
+    </style>
+    <noscript><style>#splash { display: none; }</style></noscript>
   </head>
   <body>
+    <div id="splash" role="status" aria-label="Cargando Al Rescate">
+      <img class="splash-logo" src="/icons/icon-192.png" width="112" height="112" alt="" />
+      <p class="splash-name">Al Rescate</p>
+      <p class="splash-tag">Rápido, rico y seguro. ¡Al Rescate!</p>
+      <div class="splash-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+    </div>
+    <script>
+      // Seguro: si por alguna razón la app no llega a arrancar, la pantalla de carga no se queda para siempre.
+      setTimeout(function () { var s = document.getElementById("splash"); if (s) s.classList.add("splash-hide"); }, 15000);
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

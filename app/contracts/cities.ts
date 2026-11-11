@@ -56,3 +56,24 @@ export function detectCity(lat: number, lng: number): CityDetection {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return { city: null, nearest: city, distanceKm: Number.POSITIVE_INFINITY };
   return distanceKm <= city.radiusKm ? { city, distanceKm } : { city: null, nearest: city, distanceKm };
 }
+
+const fold = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * ¿El texto ya nombra alguna de nuestras ciudades («Av. Quito y Calle 5, Guayaquil»)? Se compara sin tildes ni
+ * mayúsculas y por palabras completas. Sirve para NO empujar la búsqueda de una dirección hacia la ciudad elegida
+ * cuando el cliente ya escribió otra.
+ */
+export function mentionsKnownCity(text: string): boolean {
+  const haystack = ` ${fold(text)} `;
+  return CITIES.some((c) => haystack.includes(` ${fold(c.name)} `));
+}
+
+export type Viewbox = { west: number; south: number; east: number; north: number };
+
+/** Cuadro que rodea a la ciudad (su centro ± su radio). Se usa como sesgo suave al buscar direcciones. */
+export function cityViewbox(city: City): Viewbox {
+  const dLat = city.radiusKm / 111;
+  const dLng = city.radiusKm / (111 * Math.cos((city.lat * Math.PI) / 180));
+  return { west: city.lng - dLng, south: city.lat - dLat, east: city.lng + dLng, north: city.lat + dLat };
+}
