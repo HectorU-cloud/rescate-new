@@ -1,0 +1,11 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ec.vectoraec.app",
+      "sha256_cert_fingerprints":
+        ["83:E2:94:4C:EE:54:AD:CF:A8:93:35:E3:8C:EE:87:94:1D:CC:E8:3D:CB:A9:4D:26:5B:8F:32:18:B8:16:86:9A"]
+    }
+  }
+]
