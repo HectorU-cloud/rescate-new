@@ -16,6 +16,7 @@ import CityChip from "@/components/CityChip";
 import WelcomeTour from "@/components/WelcomeTour";
 import { useCourierCity } from "@/hooks/useCourierCity";
 import { addDismissed, dismissedKey, parseDismissed, pruneDismissed } from "@/lib/dismissed-orders";
+import { courierNavTarget, mapsDirectionsUrl } from "@/lib/courier-nav";
 
 const isLocked = (attempts: number) => attempts >= BUSINESS_RULES.maxCodeAttempts;
 
@@ -252,6 +253,14 @@ export default function CourierPanel() {
               <p className="mt-1 rounded-xl bg-brand-soft px-3 py-2 text-xs font-bold text-brand-dark">
                 📍 Entrega en: {order.deliveryAddress}
               </p>
+              {(() => {
+                const nav = courierNavTarget(order, business);
+                return nav ? (
+                  <a href={nav.href} target="_blank" rel="noreferrer" className="mt-2 block rounded-xl bg-secondary py-2.5 text-center text-xs font-extrabold">
+                    {nav.label}
+                  </a>
+                ) : null;
+              })()}
               <div className="mt-3 rounded-xl bg-brand-soft p-3 text-center text-brand-dark">
                 <p className="text-xs font-extrabold">🔐 Tu código para el local</p>
                 <p className="mt-1 font-display text-4xl font-extrabold tracking-[0.3em]">{order.courierPickupCode ?? "······"}</p>
@@ -347,18 +356,15 @@ export default function CourierPanel() {
                   <p className="bg-secondary/60 px-3 py-2 text-[10px] text-muted-foreground">La línea punteada es solo una referencia hacia el destino; para la ruta por calles usa «Ir con el cliente».</p>
                 </div>
               )}
-              <div className="mt-2 flex gap-2 text-xs font-extrabold">
-                {business?.lat != null && business?.lng != null && (
-                  <a href={`https://www.google.com/maps/dir/?api=1&destination=${business.lat},${business.lng}`} target="_blank" rel="noreferrer" className="flex-1 rounded-xl bg-secondary py-2 text-center">
-                    🧭 Ir al local
+              {(() => {
+                // Ya recogió el pedido: solo tiene sentido ir con el cliente.
+                const nav = courierNavTarget(order, business);
+                return nav ? (
+                  <a href={nav.href} target="_blank" rel="noreferrer" className="mt-2 block rounded-xl bg-secondary py-2.5 text-center text-xs font-extrabold">
+                    {nav.label}
                   </a>
-                )}
-                {order.deliveryLat != null && order.deliveryLng != null && (
-                  <a href={`https://www.google.com/maps/dir/?api=1&destination=${order.deliveryLat},${order.deliveryLng}`} target="_blank" rel="noreferrer" className="flex-1 rounded-xl bg-secondary py-2 text-center">
-                    🧭 Ir con el cliente
-                  </a>
-                )}
-              </div>
+                ) : null;
+              })()}
               <div className="mt-3 rounded-xl bg-secondary p-3">
                 <label htmlFor={`delivery-code-${order.id}`} className="mb-1 block text-xs font-extrabold">
                   Código de confirmación del cliente
@@ -445,14 +451,24 @@ export default function CourierPanel() {
                 {business?.emoji ?? "🍽️"}
               </span>
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-extrabold">
+                <p className="text-sm font-extrabold">
                   {business?.name}
-                  <span className="ml-2 text-xs font-bold text-muted-foreground">
+                  <span className="ml-2 whitespace-nowrap text-xs font-bold text-muted-foreground">
                     {timeAgo(order.createdAt)}
                   </span>
                 </p>
-                <p className="truncate text-xs font-semibold text-muted-foreground">
-                  📍 {order.deliveryDistanceKm != null ? `A ${order.deliveryDistanceKm} km del local` : "Entrega a domicilio"} · cobras {money(order.total)} en efectivo
+                {business?.address && (
+                  <p className="mt-0.5 text-xs font-bold">
+                    📤 Recoge en: {business.address}
+                    {business.lat != null && business.lng != null && (
+                      <a href={mapsDirectionsUrl(business.lat, business.lng)} target="_blank" rel="noreferrer" className="ml-2 whitespace-nowrap font-extrabold text-brand-dark underline">
+                        Ver en el mapa
+                      </a>
+                    )}
+                  </p>
+                )}
+                <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
+                  📍 {order.deliveryDistanceKm != null ? `Entrega a ${order.deliveryDistanceKm} km del local` : "Entrega a domicilio"} · cobras {money(order.total)} en efectivo
                 </p>
                 <p className="text-[11px] text-muted-foreground">La dirección del cliente se muestra al aceptar.</p>
                 {dismissed.includes(order.id) ? (
