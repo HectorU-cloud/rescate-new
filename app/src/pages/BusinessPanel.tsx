@@ -1,5 +1,7 @@
 import { useDialogs } from "@/providers/dialogs";
 import WalletCard from "@/components/WalletCard";
+import DayReport from "@/components/DayReport";
+import { courierPayToBusiness } from "@contracts/fees";
 import { DEFAULT_PREP_MINUTES, PREP_MINUTES_OPTIONS } from "@contracts/wallet";
 import { useState } from "react";
 import { Link } from "react-router";
@@ -336,12 +338,36 @@ function Panel({
   const stats = trpc.business.stats.useQuery(undefined, {
     refetchInterval: 15_000,
   });
+  const dialogs = useDialogs();
+  const [reportOpen, setReportOpen] = useState(false);
+  const [justClosed, setJustClosed] = useState(false);
   const toggleOpen = trpc.business.toggleOpen.useMutation({
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       utils.business.myBusiness.invalidate();
       utils.catalog.invalidate();
+      // Al cerrar, se muestra el reporte del día (ventas y tarifa que se debe a Rescate).
+      if (!variables.isOpen) {
+        setJustClosed(true);
+        setReportOpen(true);
+      }
     },
+    onError: (e) => toast.error(e.message),
   });
+  const activeOrders = stats.data?.activeOrders ?? 0;
+  const recentReviews = trpc.business.reviews.useQuery(undefined, { refetchInterval: 60_000 });
+  const latestComments = (recentReviews.data ?? []).filter((r) => r.businessComment?.trim()).slice(0, 2);
+
+  const handleToggleOpen = async () => {
+    if (isOpen) {
+      const ok = await dialogs.confirm({
+        title: "¿Cerrar el local?",
+        description: `No aceptarás más pedidos. Si tienes pedidos en cola o pendientes, los puedes hacer o cancelar.${activeOrders > 0 ? ` Ahora tienes ${activeOrders} pedido${activeOrders === 1 ? "" : "s"} activo${activeOrders === 1 ? "" : "s"}.` : ""}`,
+        confirmLabel: "Sí, cerrar",
+      });
+      if (!ok) return;
+    }
+    toggleOpen.mutate({ isOpen: !isOpen });
+  };
 
   return (
     <div className="space-y-4">
@@ -353,15 +379,32 @@ function Panel({
             Panel del comercio
           </p>
         </div>
-        <button
-          onClick={() => toggleOpen.mutate({ isOpen: !isOpen })}
-          className={`rounded-full px-4 py-2 text-sm font-extrabold text-white ${
-            isOpen ? "bg-brand" : "bg-foreground"
-          }`}
-        >
-          {isOpen ? "🟢 Abierto" : "⚫ Cerrado"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => { setJustClosed(false); setReportOpen(true); }}
+            className="rounded-full bg-secondary px-4 py-2 text-sm font-extrabold ring-1 ring-border"
+          >
+            📄 Reporte del día
+          </button>
+          <button
+            disabled={toggleOpen.isPending}
+            onClick={handleToggleOpen}
+            className={`rounded-full px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60 ${
+              isOpen ? "bg-brand" : "bg-foreground"
+            }`}
+          >
+            {isOpen ? "🟢 Abierto" : "⚫ Cerrado"}
+          </button>
+        </div>
       </div>
+      <DayReport open={reportOpen} onOpenChange={setReportOpen} justClosed={justClosed} />
+
+      {!isOpen && business.approvalStatus === "approved" && (
+        <p className="rounded-2xl bg-secondary px-4 py-3 text-sm font-bold">
+          ⚫ Local cerrado: no entran pedidos nuevos.{activeOrders > 0 ? ` Aún tienes ${activeOrders} pedido${activeOrders === 1 ? "" : "s"} por atender: puedes hacerlos o cancelarlos.` : ""}
+        </p>
+      )}
 
       {business.approvalStatus === "pending" && (
         <p className="rounded-2xl bg-amber-100 px-4 py-3 text-sm font-bold text-amber-900">
@@ -392,6 +435,21 @@ function Panel({
         <Stat label="Rescates" value={String(stats.data?.rescues ?? 0)} />
         <Stat label="Calificación" value={stats.data?.ratingCount ? `⭐ ${stats.data.rating.toFixed(1)} (${stats.data.ratingCount})` : "Sin calificaciones"} />
       </div>
+
+      {latestComments.length > 0 && (
+        <section className="space-y-2 rounded-2xl bg-card p-4 ring-1 ring-border" aria-label="Lo que dicen tus clientes">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-sm font-extrabold">💬 Lo que dicen tus clientes</h2>
+            <button type="button" onClick={() => setTab("resenas")} className="text-xs font-extrabold text-brand underline">Ver todas</button>
+          </div>
+          {latestComments.map((r) => (
+            <p key={r.id} className="rounded-xl bg-secondary px-3 py-2 text-sm">
+              <span className="font-extrabold">{"⭐".repeat(r.businessStars)}</span> {r.businessComment}
+              <span className="ml-1 text-xs text-muted-foreground">— {r.customerName || "Cliente"}</span>
+            </p>
+          ))}
+        </section>
+      )}
 
       {/* Tabs */}
       <div className="grid grid-cols-2 gap-1 rounded-2xl bg-secondary p-1 sm:grid-cols-4">
@@ -519,8 +577,23 @@ function ReviewsTab() {
   if (reviews.isLoading) return <div className="h-32 animate-pulse rounded-2xl bg-muted" />;
   if (reviews.isError) return <p className="rounded-2xl bg-destructive/10 p-4 text-sm">No se pudieron cargar las reseñas. Intenta nuevamente.</p>;
   if (!reviews.data?.length) return <div className="rounded-2xl border border-dashed p-8 text-center"><p className="text-3xl">⭐</p><h2 className="mt-2 font-extrabold">Todavía no tienes reseñas</h2><p className="mt-1 text-sm text-muted-foreground">Los comentarios aparecerán aquí cuando tus clientes califiquen pedidos.</p></div>;
+  const total = reviews.data.length;
+  const average = reviews.data.reduce((sum, r) => sum + r.businessStars, 0) / total;
+  const byStars = [5, 4, 3, 2, 1].map((stars) => ({ stars, count: reviews.data.filter((r) => r.businessStars === stars).length }));
   return <div className="space-y-3">
-    <div><h2 className="font-display text-lg font-extrabold">Opiniones de tus clientes</h2><p className="text-sm text-muted-foreground">Últimas {reviews.data.length} reseñas (máximo 100).</p></div>
+    <div><h2 className="font-display text-lg font-extrabold">Opiniones de tus clientes</h2><p className="text-sm text-muted-foreground">Últimas {total} reseñas (máximo 100).</p></div>
+    <div className="flex items-center gap-4 rounded-2xl bg-card p-4 ring-1 ring-border">
+      <div className="text-center"><p className="font-display text-3xl font-extrabold">{average.toFixed(1)}</p><p className="text-xs font-bold text-muted-foreground">de 5</p></div>
+      <div className="flex-1 space-y-1">
+        {byStars.map(({ stars, count }) => (
+          <div key={stars} className="flex items-center gap-2 text-xs font-bold">
+            <span className="w-6">{stars}★</span>
+            <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-brand" style={{ width: `${(count / total) * 100}%` }} /></div>
+            <span className="w-6 text-right text-muted-foreground">{count}</span>
+          </div>
+        ))}
+      </div>
+    </div>
     {reviews.data.map((review) => <article key={review.id} className="rounded-2xl border border-border bg-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-bold">{review.customerName || "Cliente"}</p><span aria-label={`${review.businessStars} de 5 estrellas`} className="font-extrabold">{"⭐".repeat(review.businessStars)}<span className="ml-1 text-xs text-muted-foreground">{review.businessStars}/5</span></span></div>
       <p className="mt-2 text-sm">{review.businessComment?.trim() || "El cliente no dejó un comentario escrito."}</p>
@@ -669,6 +742,17 @@ function OrdersTab({ businessId }: { businessId: number }) {
     onSuccess: () => {
       utils.business.orders.invalidate();
       utils.business.stats.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  // El repartidor le dice su código al local y el local lo escribe aquí: así el pedido pasa a «en camino».
+  const confirmCourier = trpc.business.confirmCourierPickup.useMutation({
+    onSuccess: (result, variables) => {
+      setPickupCodes((c) => ({ ...c, [variables.orderId]: "" }));
+      utils.business.orders.invalidate();
+      utils.business.stats.invalidate();
+      toast.success(`Código correcto ✅ El repartidor te paga ${money(result.payToBusiness)}`, { duration: 8000 });
     },
     onError: (e) => toast.error(e.message),
   });
@@ -829,6 +913,11 @@ function OrdersTab({ businessId }: { businessId: number }) {
                 <p className="mt-1.5 text-[11px] text-muted-foreground">Se lo mostramos al cliente cuando aceptes el pedido.</p>
               </div>
             )}
+            {order.type === "delivery" && order.fulfillmentMethod === "delivery" && order.status === "picked_up" && (
+              <p className="mt-2 rounded-xl bg-amber-100 px-3 py-2 text-xs font-bold text-amber-950">
+                💵 Cobra al repartidor {money(courierPayToBusiness(order.subtotal, order.serviceFee))} <span className="font-semibold">(pedido {money(order.subtotal)} + tarifa Rescate {money(order.serviceFee)})</span>
+              </p>
+            )}
             {order.estimatedReadyAt && ["accepted", "preparing"].includes(order.status) && (
               <p className="mt-2 rounded-xl bg-brand-soft px-3 py-1.5 text-xs font-bold text-brand-dark">
                 ⏱️ Prometiste tenerlo listo a las {new Date(order.estimatedReadyAt).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}
@@ -854,11 +943,28 @@ function OrdersTab({ businessId }: { businessId: number }) {
               )}
               {order.type === "delivery" && order.fulfillmentMethod === "delivery" && order.status === "ready" && (
                 <div className="flex-1 rounded-xl bg-brand-soft px-3 py-2.5 text-center text-xs font-extrabold text-brand-dark">
-                  {order.courierPickupCode ? (
+                  {order.courierId ? (
                     <>
-                      <p>🔐 Código para entregar al repartidor</p>
-                      <p className="mt-1 text-xl tracking-[0.3em]">{order.courierPickupCode}</p>
-                      <p className="mt-1 font-semibold">Confírmalo cuando recoja el pedido.</p>
+                      <p>🔐 Pídele al repartidor su código</p>
+                      <input
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        aria-label="Código de 6 dígitos que te dice el repartidor"
+                        value={pickupCodes[order.id] ?? ""}
+                        onChange={(e) => setPickupCodes((c) => ({ ...c, [order.id]: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                        placeholder="6 dígitos"
+                        className="mt-2 w-full rounded-xl border border-border bg-card px-3 py-2 text-center text-lg font-extrabold tracking-[0.35em] text-foreground outline-none focus:ring-2 focus:ring-brand"
+                      />
+                      <button
+                        type="button"
+                        disabled={confirmCourier.isPending || (pickupCodes[order.id] ?? "").length !== 6}
+                        onClick={() => confirmCourier.mutate({ orderId: order.id, code: pickupCodes[order.id] ?? "" })}
+                        className="mt-2 w-full rounded-xl bg-brand py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
+                      >
+                        {confirmCourier.isPending ? "Verificando…" : "✔️ Confirmar entrega al repartidor"}
+                      </button>
+                      <p className="mt-1 font-semibold">El repartidor te paga {money(courierPayToBusiness(order.subtotal, order.serviceFee))} (pedido + tarifa Rescate).</p>
                     </>
                   ) : (
                     <p>Esperando que un repartidor lo tome 🏍️</p>

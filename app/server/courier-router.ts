@@ -139,81 +139,21 @@ export const courierRouter = createRouter({
       return { ok: true };
     }),
 
-  confirmPickup: authedQuery
-    .input(z.object({
-      orderId: z.number().int().positive(),
-      pickupCode: z.string().regex(/^\d{6}$/, "Ingresa el código de 6 dígitos"),
-    }))
+  // El repartidor genera un código de retiro nuevo (si se agotaron los intentos del local o sospecha que lo vieron).
+  // Reinicia el contador de intentos. Solo mientras el pedido espera en el local.
+  regeneratePickupCode: authedQuery
+    .input(z.object({ orderId: z.number().int().positive() }))
     .mutation(async ({ ctx, input }) => {
-      if (ctx.user.appRole !== "courier") {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Solo un repartidor puede confirmar el retiro" });
-      }
+      if (ctx.user.appRole !== "courier") throw new TRPCError({ code: "FORBIDDEN", message: "Solo un repartidor puede generar este código" });
       const db = getDb();
-      const courier = await db.query.users.findFirst({ where: eq(users.id, ctx.user.id) });
-      if (!courier?.courierApproved) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Tu perfil de repartidor está pendiente de aprobación administrativa." });
-      }
-      const order = await db.query.orders.findFirst({
-        where: and(
-          eq(orders.id, input.orderId),
-          eq(orders.courierId, ctx.user.id),
-          eq(orders.type, "delivery"),
-          eq(orders.fulfillmentMethod, "delivery"),
-          eq(orders.status, "ready"),
-        ),
-      });
-      if (!order) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes confirmar este pedido" });
-      }
-      // Puerta anti fuerza bruta (igual que en la entrega): cada intento consume uno ANTES de comparar el
-      // código y la condición es atómica, así que aunque lleguen 100 intentos en paralelo solo pasan los primeros 5.
-      const [gate] = await db.update(orders)
-        .set({ codeAttempts: sql`${orders.codeAttempts} + 1`, updatedAt: order.updatedAt })
+      const [res] = await db.update(orders)
+        .set({ courierPickupCode: String(randomInt(100000, 1000000)), codeAttempts: 0 })
         .where(and(
-          eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "ready"), eq(orders.type, "delivery"),
-          eq(orders.fulfillmentMethod, "delivery"),
-          lt(orders.codeAttempts, BUSINESS_RULES.maxCodeAttempts),
+          eq(orders.id, input.orderId), eq(orders.courierId, ctx.user.id), eq(orders.status, "ready"),
+          eq(orders.type, "delivery"), eq(orders.fulfillmentMethod, "delivery"),
         ));
-      if (gate.affectedRows === 0) {
-        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Se agotaron los intentos para confirmar el retiro. El pedido se liberó para otro repartidor." });
-      }
-      if (!codesMatch(order.courierPickupCode, input.pickupCode)) {
-        const [fresh] = await db.select({ attempts: orders.codeAttempts }).from(orders).where(eq(orders.id, order.id)).limit(1);
-        const left = Math.max(0, BUSINESS_RULES.maxCodeAttempts - (fresh?.attempts ?? BUSINESS_RULES.maxCodeAttempts));
-        if (left === 0) {
-          // Sin intentos: se le quita la reserva y se genera un código nuevo; ya no puede seguir probando.
-          const released = await releaseOrderFromCourier(order.id, ctx.user.id, ["ready"]);
-          await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "pickup_code_locked" });
-          if (released) {
-            const [biz] = await db.select().from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
-            if (biz) await sendPushToUser(biz.ownerId, { title: "Código de retiro bloqueado", body: `Un repartidor falló el código del pedido ${order.code} varias veces. Se liberó el pedido y el código cambió.`, url: "/panel", orderId: order.id }).catch(() => undefined);
-            await notifyCouriersOrderReady(order.id);
-          }
-        }
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: left > 0
-            ? `El código no coincide. Pídele el código al comercio. Te quedan ${left} intento${left === 1 ? "" : "s"}.`
-            : "El código no coincide y se agotaron los intentos. El pedido se liberó para otro repartidor.",
-        });
-      }
-
-      const deliveryConfirmationCode = String(randomInt(100000, 1000000));
-      const [done] = await db.update(orders)
-        .set({ status: "picked_up", deliveryConfirmationCode, codeAttempts: 0 })
-        .where(and(
-          eq(orders.id, order.id),
-          eq(orders.courierId, ctx.user.id),
-          eq(orders.type, "delivery"),
-          eq(orders.fulfillmentMethod, "delivery"),
-          eq(orders.status, "ready"),
-        ));
-      if (done.affectedRows === 0) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido cambió de estado" });
-      }
-
-      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "courier", type: "status:picked_up" });
-      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "picked_up", type: order.type });
+      if (res.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes generar un código para este pedido" });
+      await logOrderEvent({ orderId: input.orderId, actorId: ctx.user.id, actorRole: "courier", type: "pickup_code_regenerated" });
       return { ok: true };
     }),
 
@@ -294,8 +234,8 @@ export const courierRouter = createRouter({
       byOrder.set(it.orderId, arr);
     }
     return rows.map((o) => ({
-      // Los códigos se entregan verbalmente y nunca se devuelven al repartidor por API.
-      order: { ...o, deliveryConfirmationCode: null, courierPickupCode: null },
+      // El código de entrega del cliente nunca sale. El de recogida SÍ lo ve el repartidor (mientras espera en el local): es él quien se lo dice al local.
+      order: { ...o, deliveryConfirmationCode: null, courierPickupCode: o.status === "ready" ? o.courierPickupCode : null },
       business: byId.get(o.businessId) ?? null,
       items: byOrder.get(o.id) ?? [],
     }));
@@ -353,10 +293,11 @@ export const courierRouter = createRouter({
         const [updated] = await tx.update(orders).set({ status: "delivered", deliveryConfirmationCode: null, deliveredAt: new Date() })
           .where(and(eq(orders.id, order.id), eq(orders.courierId, ctx.user.id), eq(orders.status, "picked_up")));
         if (updated.affectedRows > 0 && order.type === "delivery" && Number(order.serviceFee) > 0) {
+          // La tarifa de servicio se le cobra solo al LOCAL (corte quincenal); el repartidor ya no genera deuda.
           await tx.insert(walletEntries).values({
-            walletType: "courier", walletId: ctx.user.id, entryType: "charge",
+            walletType: "business", walletId: order.businessId, entryType: "charge",
             amount: Number(order.serviceFee), status: "confirmed", orderId: order.id,
-            description: `Tarifa de servicio del pedido ${order.code}`,
+            description: `Tarifa de servicio del pedido ${order.code} (corte quincenal)`,
           });
         }
         return [updated] as const;

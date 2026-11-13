@@ -416,6 +416,17 @@ export const ordersRouter = createRouter({
         throw error;
       }
       await recomputeBusinessRating(order.businessId);
+      // Al dueño del local le llega la opinión en el momento.
+      const [ratedBiz] = await db.select({ ownerId: businesses.ownerId }).from(businesses).where(eq(businesses.id, order.businessId)).limit(1);
+      if (ratedBiz) {
+        const comment = input.businessComment?.trim();
+        await sendPushToUser(ratedBiz.ownerId, {
+          title: `Nueva reseña ${"⭐".repeat(input.businessStars)}`,
+          body: comment ? comment.slice(0, 120) : `Un cliente calificó el pedido ${order.code} con ${input.businessStars}/5.`,
+          url: "/panel",
+          orderId: order.id,
+        }).catch(() => undefined);
+      }
       if (input.courierStars != null && order.courierId) await recomputeCourierRating(order.courierId);
       await logOrderEvent({
         orderId: order.id, actorId: ctx.user.id, actorRole: "customer", type: "rated",
@@ -513,11 +524,11 @@ export const ordersRouter = createRouter({
         const [row] = await db.select().from(users).where(eq(users.id, order.courierId!)).limit(1);
         courier = row ? toPublicCourier(row) : null;
       }
-      // Los códigos del cliente son privados; el código de recogida solo se revela al comercio dueño.
+      // Los códigos del cliente son privados; el de recogida solo lo ve el repartidor asignado (él se lo dice al local).
       const visibleOrder = {
         ...order,
         ...(order.customerId !== ctx.user.id ? { deliveryConfirmationCode: null, pickupCode: null } : {}),
-        ...(!ownedBiz ? { courierPickupCode: null } : {}),
+        ...(order.courierId === ctx.user.id && order.status === "ready" ? {} : { courierPickupCode: null }),
       };
       return { ...data, order: visibleOrder, courier };
     }),

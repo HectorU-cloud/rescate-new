@@ -6,6 +6,8 @@ import { LOGIN_PATH } from "@/const";
 import { money, timeAgo, withinMinutes } from "@/lib/format";
 import { toast } from "sonner";
 import { BUSINESS_RULES } from "@contracts/constants";
+import { courierPayToBusiness } from "@contracts/fees";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ChatBox } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 import { StaticMap } from "@/components/StaticMap";
@@ -24,7 +26,9 @@ export default function CourierPanel() {
   });
   const utils = trpc.useUtils();
   const [confirmationCodes, setConfirmationCodes] = useState<Record<number, string>>({});
-  const [pickupCodes, setPickupCodes] = useState<Record<number, string>>({});
+  // Pedido que acaba de pasar a «en camino»: se abre la pantalla de cuánto pagarle al local.
+  const [payOrderId, setPayOrderId] = useState<number | null>(null);
+  const previousStatus = useRef<Record<number, string>>({});
   // Última posición GPS propia (se actualiza junto con el envío al servidor) para dibujar el mapa de la entrega.
   const [myPos, setMyPos] = useState<{ lat: number; lng: number } | null>(null);
   const enabled = isAuthenticated && user?.appRole === "courier";
@@ -59,6 +63,15 @@ export default function CourierPanel() {
     refetchInterval: 10_000,
   });
   const earnings = trpc.courier.earnings.useQuery(undefined, { enabled });
+  // Cuando el local confirma el código, el pedido pasa de «listo» a «en camino»: se muestra cuánto pagarle al local.
+  useEffect(() => {
+    if (!mine.data) return;
+    const before = previousStatus.current;
+    for (const { order } of mine.data) {
+      if (order.status === "picked_up" && before[order.id] === "ready") setPayOrderId(order.id);
+    }
+    previousStatus.current = Object.fromEntries(mine.data.map(({ order }) => [order.id, order.status]));
+  }, [mine.data]);
   // Pedidos que ocultó de su tablero en este dispositivo ("No me interesa").
   const storageKey = user ? dismissedKey(user.id) : null;
   const [dismissed, setDismissed] = useState<number[]>([]);
@@ -119,12 +132,10 @@ export default function CourierPanel() {
     },
     onError: (e) => toast.error(e.message),
   });
-  const confirmPickup = trpc.courier.confirmPickup.useMutation({
-    onSuccess: (_result, variables) => {
-      setPickupCodes((current) => ({ ...current, [variables.orderId]: "" }));
-      toast.success("Recogida confirmada. ¡El pedido va en camino!");
+  const regenerateCode = trpc.courier.regeneratePickupCode.useMutation({
+    onSuccess: () => {
+      toast.success("Código nuevo listo. Díselo al local.");
       utils.courier.invalidate();
-      utils.orders.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -171,10 +182,31 @@ export default function CourierPanel() {
   const waitingPickup = (mine.data ?? []).filter((d) => d.order.type === "delivery" && d.order.status === "ready");
   const active = (mine.data ?? []).filter((d) => d.order.status === "picked_up");
   const done = (mine.data ?? []).filter((d) => d.order.status === "delivered");
+  const payOrder = payOrderId != null ? (mine.data ?? []).find((d) => d.order.id === payOrderId && d.order.status === "picked_up") : undefined;
 
   return (
     <div className="space-y-5">
       <WelcomeTour role="courier" />
+      <Dialog open={!!payOrder} onOpenChange={(open) => { if (!open) setPayOrderId(null); }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Código correcto ✅</DialogTitle>
+            <DialogDescription>El local confirmó tu código. Antes de salir, págale al local:</DialogDescription>
+          </DialogHeader>
+          {payOrder && (
+            <div className="space-y-3 text-center">
+              <p className="font-display text-5xl font-extrabold">{money(courierPayToBusiness(payOrder.order.subtotal, payOrder.order.serviceFee))}</p>
+              <p className="text-sm font-semibold text-muted-foreground">
+                Pedido {money(payOrder.order.subtotal)} + tarifa Rescate {money(payOrder.order.serviceFee)}
+              </p>
+              <p className="rounded-xl bg-secondary px-3 py-2 text-xs font-bold">
+                El cliente te paga el total ({money(payOrder.order.total)}) cuando le entregues el pedido; el envío ({money(payOrder.order.deliveryFee)}) es tuyo.
+              </p>
+              <button type="button" onClick={() => setPayOrderId(null)} className="w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white">Entendido, ya le pagué</button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
       {/* Ganancias */}
       <section className="rounded-3xl bg-foreground p-5 text-white">
         <p className="text-xs font-extrabold uppercase tracking-wide text-white/60">
@@ -220,23 +252,19 @@ export default function CourierPanel() {
               <p className="mt-1 rounded-xl bg-brand-soft px-3 py-2 text-xs font-bold text-brand-dark">
                 📍 Entrega en: {order.deliveryAddress}
               </p>
-              <div className="mt-3 rounded-xl bg-secondary p-3">
-                <label htmlFor={`pickup-code-${order.id}`} className="mb-1 block text-xs font-extrabold">
-                  Código que te da el comercio al recoger
-                </label>
-                <input
-                  id={`pickup-code-${order.id}`}
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6}
-                  value={pickupCodes[order.id] ?? ""}
-                  onChange={(event) => setPickupCodes((current) => ({
-                    ...current,
-                    [order.id]: event.target.value.replace(/\D/g, "").slice(0, 6),
-                  }))}
-                  placeholder="6 dígitos"
-                  className="w-full rounded-xl border border-border bg-card px-3 py-2 text-center text-lg font-extrabold tracking-[0.35em] outline-none focus:ring-2 focus:ring-brand"
-                />
+              <div className="mt-3 rounded-xl bg-brand-soft p-3 text-center text-brand-dark">
+                <p className="text-xs font-extrabold">🔐 Tu código para el local</p>
+                <p className="mt-1 font-display text-4xl font-extrabold tracking-[0.3em]">{order.courierPickupCode ?? "······"}</p>
+                <p className="mt-1 text-xs font-semibold">Díselo al encargado del local. Él lo escribe en su panel y recién entonces el pedido pasa a «en camino».</p>
+                {isLocked(order.codeAttempts) && <p className="mt-2 text-xs font-extrabold text-destructive">🔒 El local falló el código varias veces. Genera uno nuevo.</p>}
+                <button
+                  type="button"
+                  disabled={regenerateCode.isPending}
+                  onClick={() => regenerateCode.mutate({ orderId: order.id })}
+                  className="mt-2 rounded-xl bg-card px-3 py-1.5 text-xs font-extrabold ring-1 ring-border disabled:opacity-50"
+                >
+                  🔄 Generar código nuevo
+                </button>
               </div>
               {withinMinutes(order.courierAcceptedAt, BUSINESS_RULES.courierReleaseWindowMin) && (
                 <button
@@ -251,13 +279,9 @@ export default function CourierPanel() {
                   Soltar pedido (solo los primeros {BUSINESS_RULES.courierReleaseWindowMin} min)
                 </button>
               )}
-              <button
-                disabled={confirmPickup.isPending || (pickupCodes[order.id] ?? "").length !== 6}
-                onClick={() => confirmPickup.mutate({ orderId: order.id, pickupCode: pickupCodes[order.id] ?? "" })}
-                className="mt-3 w-full rounded-xl bg-brand py-3 text-sm font-extrabold text-white disabled:opacity-50"
-              >
-                {confirmPickup.isPending ? "Verificando código…" : "✔️ Confirmar recogida"}
-              </button>
+              <p className="mt-3 rounded-xl bg-secondary px-3 py-2 text-center text-xs font-bold text-muted-foreground">
+                Esta pantalla se actualiza sola cuando el local confirme tu código.
+              </p>
             </div>
           ))}
         </section>
@@ -287,6 +311,11 @@ export default function CourierPanel() {
                 <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-extrabold text-brand-dark">
                   +{money(order.deliveryFee)}
                 </span>
+              </div>
+              <div className="mt-3 rounded-2xl bg-amber-100 p-3 text-amber-950">
+                <p className="text-xs font-extrabold">💵 Págale al local</p>
+                <p className="font-display text-3xl font-extrabold">{money(courierPayToBusiness(order.subtotal, order.serviceFee))}</p>
+                <p className="text-xs font-semibold">Pedido {money(order.subtotal)} + tarifa Rescate {money(order.serviceFee)}. Si ya le pagaste, sigue: el cliente te paga el total al entregar.</p>
               </div>
               <div className="mt-3 space-y-1.5 text-xs font-bold">
                 <p className="rounded-xl bg-secondary px-3 py-2">

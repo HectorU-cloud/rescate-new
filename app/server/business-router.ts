@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { randomInt } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lt, or, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "./middleware";
 import { cancelOrderAndRestock } from "./lib/orders";
@@ -8,7 +8,8 @@ import { attachItemOptions } from "./lib/product-options";
 import { round2 } from "@contracts/options";
 import { getDb } from "./queries/connection";
 import { BUSINESS_RULES } from "@contracts/constants";
-import { MAX_PREP_MINUTES, MIN_PREP_MINUTES } from "@contracts/wallet";
+import { MAX_PREP_MINUTES, MIN_PREP_MINUTES, computeStatement, periodBounds } from "@contracts/wallet";
+import { courierPayToBusiness, cutPeriodFor, ecuadorDay, summarizeDay } from "@contracts/fees";
 import { assertWalletNotBlocked } from "./lib/wallet";
 import { computePackExpiry, isPackExpired } from "@contracts/packs";
 import { distanceMeters, isInServiceArea } from "@contracts/geo";
@@ -350,10 +351,69 @@ export const businessRouter = createRouter({
         byOrder.set(it.orderId, arr);
       }
       return filtered.map((o) => ({
-        // Los códigos del cliente son privados; el comercio recibe su código para entregar al repartidor.
-        order: { ...o, deliveryConfirmationCode: null, pickupCode: null, needsPickupCode: o.type === "rescue" && !!o.pickupCode },
+        // Los códigos son privados: el del cliente nunca sale, y el de recogida lo tiene el repartidor (el local lo escribe, no lo lee).
+        order: { ...o, deliveryConfirmationCode: null, pickupCode: null, courierPickupCode: null, needsPickupCode: o.type === "rescue" && !!o.pickupCode },
         items: byOrder.get(o.id) ?? [],
       }));
+    }),
+
+  // El REPARTIDOR le dice su código de 6 dígitos al local; el local lo escribe aquí y recién entonces el pedido
+  // pasa a «en camino». Cada intento consume uno antes de comparar (anti fuerza bruta, atómico).
+  confirmCourierPickup: authedQuery
+    .input(z.object({
+      orderId: z.number().int().positive(),
+      code: z.string().regex(/^\d{6}$/, "El código tiene 6 dígitos"),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      const db = getDb();
+      const order = await db.query.orders.findFirst({
+        where: and(
+          eq(orders.id, input.orderId),
+          eq(orders.businessId, biz.id),
+          eq(orders.type, "delivery"),
+          eq(orders.fulfillmentMethod, "delivery"),
+          eq(orders.status, "ready"),
+        ),
+      });
+      if (!order) throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes confirmar este pedido" });
+      if (order.courierId == null) throw new TRPCError({ code: "BAD_REQUEST", message: "Todavía no hay un repartidor asignado a este pedido" });
+      const courierId = order.courierId;
+      const [gate] = await db.update(orders)
+        .set({ codeAttempts: sql`${orders.codeAttempts} + 1`, updatedAt: order.updatedAt })
+        .where(and(
+          eq(orders.id, order.id), eq(orders.businessId, biz.id), eq(orders.courierId, courierId), eq(orders.status, "ready"),
+          lt(orders.codeAttempts, BUSINESS_RULES.maxCodeAttempts),
+        ));
+      if (gate.affectedRows === 0) {
+        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "Se agotaron los intentos. Pídele al repartidor que genere un código nuevo desde su pantalla." });
+      }
+      if (!codesMatch(order.courierPickupCode, input.code)) {
+        const [fresh] = await db.select({ attempts: orders.codeAttempts }).from(orders).where(eq(orders.id, order.id)).limit(1);
+        const left = Math.max(0, BUSINESS_RULES.maxCodeAttempts - (fresh?.attempts ?? BUSINESS_RULES.maxCodeAttempts));
+        if (left === 0) {
+          // Sin intentos: el código queda bloqueado hasta que el REPARTIDOR (dueño del código) genere uno nuevo.
+          // Quien adivina no puede reiniciar el contador por su cuenta. El pedido sigue siendo del repartidor.
+          await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: "pickup_code_locked" });
+          await sendPushToUser(courierId, { title: "Código de retiro bloqueado", body: `El local falló el código del pedido ${order.code} varias veces. Abre la app y genera un código nuevo.`, orderId: order.id }).catch(() => undefined);
+        }
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: left > 0
+            ? `El código no coincide. Pídele el código al repartidor. Te quedan ${left} intento${left === 1 ? "" : "s"}.`
+            : "El código no coincide y se agotaron los intentos. Pídele al repartidor que genere un código nuevo desde su pantalla.",
+        });
+      }
+      const deliveryConfirmationCode = String(randomInt(100000, 1000000));
+      const [done] = await db.update(orders)
+        .set({ status: "picked_up", deliveryConfirmationCode, codeAttempts: 0 })
+        .where(and(eq(orders.id, order.id), eq(orders.businessId, biz.id), eq(orders.courierId, courierId), eq(orders.status, "ready")));
+      if (done.affectedRows === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "El pedido cambió de estado. Actualiza la pantalla." });
+      const payToBusiness = courierPayToBusiness(order.subtotal, order.serviceFee);
+      await logOrderEvent({ orderId: order.id, actorId: ctx.user.id, actorRole: "business", type: "status:picked_up" });
+      await notifyOrderStatus({ customerId: order.customerId, orderId: order.id, code: order.code, status: "picked_up", type: order.type });
+      await sendPushToUser(courierId, { title: "Código correcto ✅", body: `Págale al local $${payToBusiness.toFixed(2)} (pedido + tarifa Rescate) y lleva el pedido ${order.code}.`, orderId: order.id }).catch(() => undefined);
+      return { ok: true, payToBusiness };
     }),
 
   updateOrderStatus: authedQuery
@@ -751,6 +811,49 @@ export const businessRouter = createRouter({
     // Al comercio solo se le muestra el primer nombre del cliente (igual que el chat y la tarjeta del repartidor).
     return rows.map((r) => ({ ...r, customerName: r.customerName?.trim().split(/\s+/)[0] || null }));
   }),
+
+  // Reporte del día (por defecto hoy, hora de Ecuador): ventas, tarifa de servicio que el local le debe a Rescate
+  // y cómo va el corte quincenal. Solo el dueño del comercio.
+  report: authedQuery
+    .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "La fecha debe tener el formato AAAA-MM-DD").optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const biz = await requireMyBusiness(ctx.user.id);
+      const db = getDb();
+      const day = input?.date ?? ecuadorDay();
+      if (day > ecuadorDay()) throw new TRPCError({ code: "BAD_REQUEST", message: "No puedes pedir el reporte de un día que todavía no llega." });
+      let bounds: ReturnType<typeof periodBounds>;
+      try {
+        bounds = periodBounds(day, day);
+      } catch (error) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : "Fecha inválida" });
+      }
+      const rows = await db.select().from(orders).where(and(
+        eq(orders.businessId, biz.id),
+        or(
+          and(eq(orders.status, "delivered"), gte(orders.deliveredAt, bounds.start), lt(orders.deliveredAt, bounds.end)),
+          and(eq(orders.status, "cancelled"), gte(orders.updatedAt, bounds.start), lt(orders.updatedAt, bounds.end)),
+        ),
+      ));
+      const list = rows
+        .map((o) => ({
+          code: o.code, type: o.type, fulfillmentMethod: o.fulfillmentMethod, status: o.status,
+          subtotal: Number(o.subtotal), serviceFee: Number(o.serviceFee), deliveryFee: Number(o.deliveryFee),
+          at: (o.status === "delivered" ? o.deliveredAt : o.updatedAt)?.toISOString() ?? null,
+        }))
+        .sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""));
+      const cut = cutPeriodFor(bounds.start);
+      const cutBounds = periodBounds(cut.from, cut.to);
+      const entries = await db.select().from(walletEntries).where(and(eq(walletEntries.walletType, "business"), eq(walletEntries.walletId, biz.id)));
+      const statement = computeStatement(entries, cutBounds.start.getTime(), cutBounds.end.getTime());
+      return {
+        businessName: biz.name,
+        day,
+        generatedAt: new Date().toISOString(),
+        orders: list,
+        totals: summarizeDay(list),
+        cut: { ...cut, ...statement },
+      };
+    }),
 
   // --- Estadísticas ---
   // Ventas = lo que cobra el local (subtotal de pedidos ENTREGADOS). El envío no cuenta: es del repartidor.

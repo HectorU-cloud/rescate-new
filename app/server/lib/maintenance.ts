@@ -118,7 +118,7 @@ export async function sweepOrders() {
       if (!ok) continue; // el repartidor justo confirmó el retiro o lo soltó: no pasa nada
       released += 1;
       await logOrderEvent({ orderId: o.id, actorId: courierId, actorRole: "system", type: "courier_no_show", detail: `No confirmó el retiro en ${BUSINESS_RULES.courierPickupTimeoutMin} minutos.` });
-      await sendPushToUser(courierId, { title: "Reserva liberada ⏱️", body: `Liberamos el pedido ${o.code} porque no confirmaste el retiro en ${BUSINESS_RULES.courierPickupTimeoutMin} minutos.`, url: "/repartidor", orderId: o.id }).catch(() => undefined);
+      await sendPushToUser(courierId, { title: "Reserva liberada ⏱️", body: `Liberamos el pedido ${o.code} porque el local no confirmó tu código de retiro en ${BUSINESS_RULES.courierPickupTimeoutMin} minutos.`, url: "/repartidor", orderId: o.id }).catch(() => undefined);
       await sendPushToUser(o.customerId, { title: "Buscamos otro repartidor 🛵", body: `El repartidor de tu pedido ${o.code} no llegó al local. Estamos asignando otro.`, orderId: o.id }).catch(() => undefined);
       const [biz] = await db.select().from(businesses).where(eq(businesses.id, o.businessId)).limit(1);
       if (biz) await sendPushToUser(biz.ownerId, { title: "El repartidor no llegó", body: `El pedido ${o.code} sigue listo y buscamos otro repartidor. El código de retiro cambió.`, url: "/panel", orderId: o.id }).catch(() => undefined);

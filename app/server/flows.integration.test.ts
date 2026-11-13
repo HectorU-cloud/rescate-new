@@ -173,7 +173,7 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
 
   // ------------------------------------------------------------------ toma atómica
   describe("toma de pedidos por repartidores", () => {
-    it("al marcar un delivery como listo genera un código visible solo al comercio", async () => {
+    it("al marcar un delivery como listo genera un código que el repartidor ve y el comercio NO puede leer", async () => {
       const customer = await mkUser("customer");
       const owner = await mkUser("business");
       const businessId = await mkBusiness(owner.id);
@@ -183,7 +183,11 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       const order = await getOrder(orderId);
       expect(order.courierPickupCode).toMatch(/^\d{6}$/);
       const businessOrder = (await callerFor(owner).business.orders({ activeOnly: true })).find((entry) => entry.order.id === orderId);
-      expect(businessOrder?.order.courierPickupCode).toBe(order.courierPickupCode);
+      expect(businessOrder?.order.courierPickupCode).toBeNull(); // el local lo ESCRIBE, no lo lee
+      const courier = await mkUser("courier");
+      await callerFor(courier).courier.accept({ orderId });
+      const courierOrder = (await callerFor(courier).courier.myDeliveries()).find((entry) => entry.order.id === orderId);
+      expect(courierOrder?.order.courierPickupCode).toBe(order.courierPickupCode); // el repartidor sí lo ve
       const customerOrder = (await callerFor(customer).orders.mine()).find((entry) => entry.order.id === orderId);
       expect(customerOrder?.order.courierPickupCode).toBeNull();
     });
@@ -206,9 +210,10 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect(order.courierId).toBe(winner.id);
     });
 
-    it("solo pasa a 'en camino' cuando el repartidor confirma el código del comercio", async () => {
+    it("solo pasa a 'en camino' cuando el comercio escribe el código que le dice el repartidor", async () => {
       const customer = await mkUser("customer");
-      const biz = await mkBusiness((await mkUser("business")).id);
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
       const courier = await mkUser("courier");
       const orderId = await mkOrder({
         customerId: customer.id,
@@ -217,16 +222,63 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
         courierPickupCode: "123456",
       });
       const c = callerFor(courier);
+      const b = callerFor(owner);
 
+      await expect(b.business.confirmCourierPickup({ orderId, code: "123456" })).rejects.toThrow(/Todavía no hay un repartidor/);
       await c.courier.accept({ orderId });
       expect((await getOrder(orderId)).status).toBe("ready");
-      await expect(c.courier.confirmPickup({ orderId, pickupCode: "000000" })).rejects.toThrow(/código no coincide/i);
+      // El repartidor ya no puede confirmarse a sí mismo: ese paso es del local.
+      expect("confirmPickup" in c.courier).toBe(false);
+      await expect(b.business.confirmCourierPickup({ orderId, code: "000000" })).rejects.toThrow(/código no coincide/i);
       expect((await getOrder(orderId)).status).toBe("ready");
 
-      expect((await c.courier.confirmPickup({ orderId, pickupCode: "123456" })).ok).toBe(true);
+      const result = await b.business.confirmCourierPickup({ orderId, code: "123456" });
+      expect(result.ok).toBe(true);
+      expect(result.payToBusiness).toBeCloseTo(Number((await getOrder(orderId)).subtotal) + Number((await getOrder(orderId)).serviceFee), 2);
       const order = await getOrder(orderId);
       expect(order.status).toBe("picked_up");
       expect(order.deliveryConfirmationCode).toMatch(/^\d{6}$/);
+    });
+
+    it("otro comercio no puede confirmar el retiro de un pedido ajeno", async () => {
+      const customer = await mkUser("customer");
+      const biz = await mkBusiness((await mkUser("business")).id);
+      const stranger = await mkUser("business");
+      await mkBusiness(stranger.id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status: "ready", readyAt: new Date(), courierPickupCode: "123456" });
+      await callerFor(courier).courier.accept({ orderId });
+      await expect(callerFor(stranger).business.confirmCourierPickup({ orderId, code: "123456" })).rejects.toThrow(/No puedes confirmar/);
+      expect((await getOrder(orderId)).status).toBe("ready");
+    });
+
+    it("la tarifa de servicio se le cobra solo al local (no al repartidor) y no se duplica", async () => {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const courier = await mkUser("courier");
+      const orderId = await mkOrder({ customerId: customer.id, businessId: biz, status: "picked_up", courierId: courier.id, courierAcceptedAt: new Date(), deliveryConfirmationCode: "654321", serviceFee: 0.45 });
+      const c = callerFor(courier);
+      await c.courier.markDelivered({ orderId, confirmationCode: "654321" });
+      await c.courier.markDelivered({ orderId, confirmationCode: "654321" }).catch(() => undefined);
+      const entries = await db.select().from(S.walletEntries).where(eq(S.walletEntries.orderId, orderId));
+      expect(entries).toHaveLength(1);
+      expect([entries[0].walletType, Number(entries[0].walletId), entries[0].entryType, Number(entries[0].amount), entries[0].status]).toEqual(["business", biz, "charge", 0.45, "confirmed"]);
+    });
+
+    it("el reporte del día suma ventas (sin envío) y la tarifa que el local debe", async () => {
+      const customer = await mkUser("customer");
+      const owner = await mkUser("business");
+      const biz = await mkBusiness(owner.id);
+      const courier = await mkUser("courier");
+      const mk = (code: string, status: "delivered" | "cancelled", subtotal: number) => mkOrder({ code, customerId: customer.id, businessId: biz, status, courierId: courier.id, subtotal, deliveryFee: 1.5, serviceFee: 0.45, total: subtotal + 1.95, deliveredAt: new Date() });
+      await mk(`RPT-${Date.now()}-1`, "delivered", 10);
+      await mk(`RPT-${Date.now()}-2`, "delivered", 5.5);
+      await mk(`RPT-${Date.now()}-3`, "cancelled", 7);
+      const report = await callerFor(owner).business.report();
+      expect(report.totals).toMatchObject({ delivered: 2, cancelled: 1, sales: 15.5, serviceFees: 0.9, deliveryFees: 3 });
+      expect(report.cut.from <= report.day && report.day <= report.cut.to).toBe(true);
+      await expect(callerFor(owner).business.report({ date: "2999-01-01" })).rejects.toThrow(/todavía no llega/);
     });
 
     it("un repartidor con 2 entregas activas no puede tomar una tercera", async () => {
@@ -1218,11 +1270,11 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
       expect((await getOrder(orderId)).courierId).toBeNull();
     });
 
-    it("si el repartidor confirma el retiro justo cuando se libera, gana uno solo y el estado queda coherente", async () => {
-      const { courier, orderId } = await setupStale();
+    it("si el local confirma el retiro justo cuando se libera, gana uno solo y el estado queda coherente", async () => {
+      const { courier, owner, orderId } = await setupStale();
       await Promise.allSettled([
         sweepOrders(),
-        callerFor(courier).courier.confirmPickup({ orderId, pickupCode: "123456" }),
+        callerFor(owner).business.confirmCourierPickup({ orderId, code: "123456" }),
       ]);
       const order = await getOrder(orderId);
       if (order.status === "picked_up") expect(order.courierId).toBe(courier.id);
@@ -1243,50 +1295,49 @@ describe.skipIf(!enabled)("flujos críticos (MySQL real)", () => {
     }
 
     it("avisa cuántos intentos quedan y el código correcto sigue funcionando dentro del límite", async () => {
-      const { courier, orderId } = await setupCode();
-      const c = callerFor(courier);
-      await expect(c.courier.confirmPickup({ orderId, pickupCode: "000000" })).rejects.toThrow(/Te quedan 4 intentos/);
-      await expect(c.courier.confirmPickup({ orderId, pickupCode: "000001" })).rejects.toThrow(/Te quedan 3 intentos/);
-      expect((await c.courier.confirmPickup({ orderId, pickupCode: "123456" })).ok).toBe(true);
+      const { owner, orderId } = await setupCode();
+      const b = callerFor(owner).business;
+      await expect(b.confirmCourierPickup({ orderId, code: "000000" })).rejects.toThrow(/Te quedan 4 intentos/);
+      await expect(b.confirmCourierPickup({ orderId, code: "000001" })).rejects.toThrow(/Te quedan 3 intentos/);
+      expect((await b.confirmCourierPickup({ orderId, code: "123456" })).ok).toBe(true);
       const order = await getOrder(orderId);
       expect([order.status, order.codeAttempts]).toEqual(["picked_up", 0]);
     });
 
-    it("tras 5 fallos se le quita el pedido, se cambia el código y el viejo ya no sirve", async () => {
-      const { courier, orderId } = await setupCode();
-      const c = callerFor(courier);
-      for (let i = 0; i < 4; i++) await expect(c.courier.confirmPickup({ orderId, pickupCode: `00000${i}` })).rejects.toThrow(/no coincide/i);
-      await expect(c.courier.confirmPickup({ orderId, pickupCode: "000009" })).rejects.toThrow(/se agotaron los intentos/i);
-
-      const order = await getOrder(orderId);
-      expect([order.status, order.courierId]).toEqual(["ready", null]);
-      expect(order.courierPickupCode).not.toBe("123456");
+    it("tras 5 fallos el código se bloquea (ni el correcto sirve) hasta que el repartidor genere uno nuevo; el pedido sigue siendo suyo", async () => {
+      const { owner, courier, orderId } = await setupCode();
+      const b = callerFor(owner).business;
+      for (let i = 0; i < 4; i++) await expect(b.confirmCourierPickup({ orderId, code: `00000${i}` })).rejects.toThrow(/no coincide/i);
+      await expect(b.confirmCourierPickup({ orderId, code: "000009" })).rejects.toThrow(/se agotaron los intentos/i);
       expect((await db.select().from(S.orderEvents).where(eq(S.orderEvents.orderId, orderId))).map((e) => e.type)).toContain("pickup_code_locked");
-      // Ni siquiera el código correcto de antes le sirve ya: no es su pedido.
-      await expect(c.courier.confirmPickup({ orderId, pickupCode: "123456" })).rejects.toThrow();
-      expect((await getOrder(orderId)).status).toBe("ready");
+      // Bloqueado: el local no puede reiniciar el contador por su cuenta.
+      await expect(b.confirmCourierPickup({ orderId, code: "123456" })).rejects.toThrow(/Se agotaron los intentos/);
+      let order = await getOrder(orderId);
+      expect([order.status, order.courierId]).toEqual(["ready", courier.id]);
+
+      await callerFor(courier).courier.regeneratePickupCode({ orderId });
+      order = await getOrder(orderId);
+      expect(order.courierPickupCode).not.toBe("123456");
+      expect(order.codeAttempts).toBe(0);
+      await expect(b.confirmCourierPickup({ orderId, code: "123456" })).rejects.toThrow(/no coincide/i); // el viejo ya no sirve
+      expect((await b.confirmCourierPickup({ orderId, code: order.courierPickupCode! })).ok).toBe(true);
     });
 
-    it("quien agotó los intentos no puede volver a tomar ese pedido, pero otro repartidor sí", async () => {
-      const { courier, orderId } = await setupCode();
-      const c = callerFor(courier);
-      for (let i = 0; i < 5; i++) await c.courier.confirmPickup({ orderId, pickupCode: `00000${i}` }).catch(() => undefined);
-      await expect(c.courier.accept({ orderId })).rejects.toThrow(/No puedes volver a tomar/);
+    it("solo el repartidor del pedido puede generar un código nuevo", async () => {
+      const { orderId } = await setupCode();
       const other = await mkUser("courier");
-      await callerFor(other).courier.accept({ orderId });
-      const newCode = (await getOrder(orderId)).courierPickupCode!;
-      expect((await callerFor(other).courier.confirmPickup({ orderId, pickupCode: newCode })).ok).toBe(true);
+      await expect(callerFor(other).courier.regeneratePickupCode({ orderId })).rejects.toThrow(/No puedes generar/);
+      expect((await getOrder(orderId)).courierPickupCode).toBe("123456");
     });
 
-    it("100 intentos en paralelo: como mucho 5 se comparan y el pedido queda liberado", async () => {
-      const { courier, orderId } = await setupCode();
-      const c = callerFor(courier);
-      const results = await Promise.allSettled(Array.from({ length: 100 }, (_, i) => c.courier.confirmPickup({ orderId, pickupCode: String(100000 + i) })));
+    it("100 intentos en paralelo: como mucho 5 se comparan", async () => {
+      const { owner, orderId } = await setupCode();
+      const b = callerFor(owner).business;
+      const results = await Promise.allSettled(Array.from({ length: 100 }, (_, i) => b.confirmCourierPickup({ orderId, code: String(100000 + i) })));
       expect(fulfilled(results)).toBe(0);
       const compared = results.filter((r) => r.status === "rejected" && /no coincide/i.test((r.reason as Error).message)).length;
       expect(compared).toBeLessThanOrEqual(5);
-      const order = await getOrder(orderId);
-      expect([order.status, order.courierId]).toEqual(["ready", null]);
+      expect((await getOrder(orderId)).status).toBe("ready");
     });
 
     it("al soltar un pedido (voluntariamente) se genera un código de retiro nuevo", async () => {
