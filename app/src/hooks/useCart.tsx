@@ -30,7 +30,12 @@ export type CartItem = {
 };
 
 /** Lo que se pasa a `add`: la línea la arma el carrito. */
-export type CartItemInput = Omit<CartItem, "quantity" | "lineKey" | "options"> & { options?: CartOption[] };
+/** `quantity` (1 por defecto) permite agregar varias unidades de una vez, como en la ventana del combo. */
+export type CartItemInput = Omit<CartItem, "quantity" | "lineKey" | "options"> & { options?: CartOption[]; quantity?: number };
+
+/** Tope por línea (el servidor acepta hasta 50 por línea). */
+export const MAX_LINE_QUANTITY = 50;
+const clampQuantity = (n: number | undefined) => Math.min(MAX_LINE_QUANTITY, Math.max(1, Math.floor(n ?? 1)));
 
 export type CartState = {
   businessId: number;
@@ -47,6 +52,8 @@ type CartContextValue = {
     business: { id: number; name: string; deliveryFee: number },
     item: CartItemInput,
   ) => void;
+  /** Cambia las opciones (y la cantidad) de una línea del carrito, p. ej. editar un combo ya agregado. */
+  replaceLine: (lineKey: string, item: CartItemInput) => void;
   remove: (lineKey: string) => void;
   setQty: (lineKey: string, quantity: number) => void;
   clear: () => void;
@@ -85,8 +92,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
       business: { id: number; name: string; deliveryFee: number },
       item: CartItemInput,
     ) => {
-      const options = item.options ?? [];
-      const lineKey = optionLineKey(item.productId, options.map((o) => o.choiceId));
+      const { quantity: requested, ...line } = item;
+      const quantity = clampQuantity(requested);
+      const options = line.options ?? [];
+      const lineKey = optionLineKey(line.productId, options.map((o) => o.choiceId));
       setCart((prev) => {
         // Como las apps reales: un solo comercio por pedido
         const base: CartState =
@@ -102,15 +111,37 @@ export function CartProvider({ children }: { children: ReactNode }) {
         const items = existing
           ? base.items.map((i) =>
               i.lineKey === lineKey
-                ? { ...i, quantity: i.quantity + 1 }
+                ? { ...i, quantity: Math.min(MAX_LINE_QUANTITY, i.quantity + quantity) }
                 : i,
             )
-          : [...base.items, { ...item, options, lineKey, quantity: 1 }];
+          : [...base.items, { ...line, options, lineKey, quantity }];
         return { ...base, items };
       });
     },
     [],
   );
+
+  const replaceLine = useCallback((oldKey: string, item: CartItemInput) => {
+    const { quantity: requested, ...line } = item;
+    const quantity = clampQuantity(requested);
+    const options = line.options ?? [];
+    const lineKey = optionLineKey(line.productId, options.map((o) => o.choiceId));
+    setCart((prev) => {
+      if (!prev) return prev;
+      const at = prev.items.findIndex((i) => i.lineKey === oldKey);
+      if (at < 0) return prev;
+      const items = [...prev.items];
+      // Si las nuevas opciones coinciden con otra línea que ya existe, se juntan en una sola.
+      const twin = items.findIndex((i, k) => k !== at && i.lineKey === lineKey);
+      if (twin >= 0) {
+        items[twin] = { ...items[twin], quantity: Math.min(MAX_LINE_QUANTITY, items[twin].quantity + quantity) };
+        items.splice(at, 1);
+      } else {
+        items[at] = { ...line, options, lineKey, quantity };
+      }
+      return { ...prev, items };
+    });
+  }, []);
 
   const remove = useCallback((lineKey: string) => {
     setCart((prev) => {
@@ -142,8 +173,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
     const count = cart?.items.reduce((a, i) => a + i.quantity, 0) ?? 0;
     const subtotal =
       cart?.items.reduce((a, i) => a + i.price * i.quantity, 0) ?? 0;
-    return { cart, count, subtotal, add, remove, setQty, clear };
-  }, [cart, add, remove, setQty, clear]);
+    return { cart, count, subtotal, add, replaceLine, remove, setQty, clear };
+  }, [cart, add, replaceLine, remove, setQty, clear]);
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

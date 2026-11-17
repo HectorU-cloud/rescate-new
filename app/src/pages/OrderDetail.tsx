@@ -6,7 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { LOGIN_PATH } from "@/const";
 import { StatusTimeline } from "@/components/StatusTimeline";
-import { ChatBox } from "@/components/ChatBox";
+import { ChatButton } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 import { RatingBox } from "@/components/RatingBox";
 import { CodeNotice } from "@/components/CodeNotice";
@@ -186,6 +186,10 @@ export default function OrderDetail() {
               {timeAgo(order.createdAt)}
             </p>
           </div>
+          {/* Chat con el repartidor: botón arriba mientras va en camino; al entregarse se cierra solo. */}
+          {order.type === "delivery" && !!order.courierId && order.customerId === user?.id && ["picked_up", "delivered"].includes(order.status) && (
+            <ChatButton orderId={order.id} ended={order.status !== "picked_up"} />
+          )}
           <span className="font-display text-xl font-extrabold">
             {money(order.total)}
           </span>
@@ -331,11 +335,6 @@ export default function OrderDetail() {
             </div>
           )}
       </section>
-
-      {/* Chat con el repartidor (en camino; luego queda como historial si hubo mensajes) */}
-      {order.type === "delivery" && !!order.courierId && order.customerId === user?.id && ["picked_up", "delivered"].includes(order.status) && (
-        <ChatBox orderId={order.id} />
-      )}
 
       {/* Detalle */}
       <section className="rounded-3xl bg-card p-5 shadow-sm ring-1 ring-border">

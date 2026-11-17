@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeOptions, isGroupOrderable, optionLineKey, resolveOptionSelection, type OptionGroupInfo } from "@contracts/options";
+import { describeOptions, firstUnmetGroupId, fromPrice, groupOptions, isGroupOrderable, optionLineKey, resolveOptionSelection, selectionHint, type OptionGroupInfo } from "@contracts/options";
 
 const papas: OptionGroupInfo = {
   id: 1, name: "Papas", minSelect: 1, maxSelect: 1,
@@ -75,5 +75,53 @@ describe("describeOptions", () => {
       { groupName: "Extras", choiceName: "Chorizo", priceDelta: 0.5 },
       { groupName: "Extras", choiceName: "Queso", priceDelta: 0.35 },
     ], money)).toBe("Papas: Pequeñas · Extras: Chorizo (+$0.50), Queso (+$0.35)");
+  });
+});
+
+describe("selectionHint", () => {
+  it("dice cuántas opciones se pueden elegir", () => {
+    expect(selectionHint({ minSelect: 1, maxSelect: 1 })).toBe("Elige 1");
+    expect(selectionHint({ minSelect: 0, maxSelect: 1 })).toBe("Elige hasta 1");
+    expect(selectionHint({ minSelect: 2, maxSelect: 2 })).toBe("Elige 2");
+    expect(selectionHint({ minSelect: 1, maxSelect: 3 })).toBe("Elige entre 1 y 3");
+    expect(selectionHint({ minSelect: 0, maxSelect: 3 })).toBe("Elige hasta 3");
+  });
+});
+
+describe("firstUnmetGroupId", () => {
+  it("devuelve el primer grupo obligatorio incompleto, en el orden del producto", () => {
+    expect(firstUnmetGroupId(combo, {})).toBe(1);
+    expect(firstUnmetGroupId(combo, { 1: [11] })).toBe(2);
+    expect(firstUnmetGroupId(combo, { 1: [11], 2: [21] })).toBeNull(); // «Extras» es opcional
+  });
+  it("respeta mínimos mayores a 1", () => {
+    const dos: OptionGroupInfo = { id: 5, name: "Salsas", minSelect: 2, maxSelect: 3, choices: [] };
+    expect(firstUnmetGroupId([dos], { 5: [1] })).toBe(5);
+    expect(firstUnmetGroupId([dos], { 5: [1, 2] })).toBeNull();
+  });
+});
+
+describe("fromPrice", () => {
+  it("suma lo mínimo obligatorio y no cuenta opcionales ni opciones agotadas", () => {
+    expect(fromPrice(5, combo)).toBe(5); // papas pequeñas y cola base cuestan 0
+    const caro: OptionGroupInfo = { id: 6, name: "Tamaño", minSelect: 1, maxSelect: 1, choices: [{ id: 61, name: "Mediano", priceDelta: 1.5 }, { id: 62, name: "Grande", priceDelta: 2.5 }, { id: 63, name: "Mini", priceDelta: 0.5, isAvailable: false }] };
+    expect(fromPrice(5, [caro, extras])).toBe(6.5);
+  });
+  it("con mínimo 2 suma las dos más baratas; un grupo imposible no suma", () => {
+    const g: OptionGroupInfo = { id: 7, name: "Salsas", minSelect: 2, maxSelect: 3, choices: [{ id: 71, name: "a", priceDelta: 0.3 }, { id: 72, name: "b", priceDelta: 0.1 }, { id: 73, name: "c", priceDelta: 0.2 }] };
+    expect(fromPrice(4, [g])).toBe(4.3);
+    expect(fromPrice(4, [{ ...g, choices: [g.choices[0]] }])).toBe(4);
+  });
+});
+
+describe("groupOptions", () => {
+  it("agrupa lo elegido por grupo y marca los adicionales con costo", () => {
+    const money = (n: number) => `$${n.toFixed(2)}`;
+    expect(groupOptions([
+      { groupName: "Cola", choiceName: "Fanta", priceDelta: 0 },
+      { groupName: "Extras", choiceName: "Chorizo", priceDelta: 0.5 },
+      { groupName: "Extras", choiceName: "Queso", priceDelta: 0 },
+    ], money)).toEqual([{ groupName: "Cola", text: "Fanta" }, { groupName: "Extras", text: "Chorizo (+$0.50), Queso" }]);
+    expect(groupOptions([], money)).toEqual([]);
   });
 });

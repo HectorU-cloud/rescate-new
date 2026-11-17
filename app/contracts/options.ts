@@ -102,3 +102,43 @@ export function describeOptions(options: { groupName: string; choiceName: string
   }
   return [...byGroup.entries()].map(([group, labels]) => `${group}: ${labels.join(", ")}`).join(" · ");
 }
+
+/** Pista corta de cuántas opciones se pueden elegir, como en las apps de delivery: «Elige 1», «Elige hasta 3». */
+export function selectionHint(group: Pick<OptionGroupInfo, "minSelect" | "maxSelect">): string {
+  const { minSelect: min, maxSelect: max } = group;
+  if (max === 1) return min > 0 ? "Elige 1" : "Elige hasta 1";
+  if (min === max) return `Elige ${max}`;
+  if (min > 0) return `Elige entre ${min} y ${max}`;
+  return `Elige hasta ${max}`;
+}
+
+/** Primer grupo obligatorio al que todavía le faltan opciones (`picked`: groupId → ids elegidos), o null si no falta ninguno. */
+export function firstUnmetGroupId(groups: OptionGroupInfo[], picked: Record<number, number[]>): number | null {
+  for (const g of groups) if ((picked[g.id]?.length ?? 0) < g.minSelect) return g.id;
+  return null;
+}
+
+/**
+ * Precio «desde»: la base más lo mínimo que hay que pagar para completar los grupos obligatorios
+ * (las `minSelect` opciones disponibles más baratas de cada uno). Sin obligatorios con costo, es la base.
+ */
+export function fromPrice(basePrice: number, groups: OptionGroupInfo[]): number {
+  let extra = 0;
+  for (const g of groups) {
+    if (g.minSelect <= 0) continue;
+    const cheapest = g.choices.filter((c) => c.isAvailable !== false).map((c) => c.priceDelta).sort((a, b) => a - b);
+    if (cheapest.length < g.minSelect) continue; // grupo imposible de completar: no suma
+    extra += cheapest.slice(0, g.minSelect).reduce((a, n) => a + n, 0);
+  }
+  return round2(basePrice + extra);
+}
+
+/** Lo elegido agrupado para mostrarlo en líneas: «Cola» → «Fanta», «Extras» → «Chorizo (+$0.50), Queso». */
+export function groupOptions(options: { groupName: string; choiceName: string; priceDelta: number }[], formatMoney: (n: number) => string): { groupName: string; text: string }[] {
+  const byGroup = new Map<string, string[]>();
+  for (const o of options) {
+    const label = o.priceDelta > 0 ? `${o.choiceName} (+${formatMoney(o.priceDelta)})` : o.choiceName;
+    byGroup.set(o.groupName, [...(byGroup.get(o.groupName) ?? []), label]);
+  }
+  return [...byGroup.entries()].map(([groupName, labels]) => ({ groupName, text: labels.join(", ") }));
+}

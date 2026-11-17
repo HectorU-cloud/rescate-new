@@ -6,7 +6,7 @@ import { useCart } from "@/hooks/useCart";
 import { CATEGORY_LABELS, money } from "@/lib/format";
 import { toast } from "sonner";
 import { packDayLabel } from "@contracts/packs";
-import { isGroupOrderable } from "@contracts/options";
+import { fromPrice, isGroupOrderable } from "@contracts/options";
 import ProductOptionsDialog, { type CustomizableProduct } from "@/components/ProductOptionsDialog";
 
 export default function BusinessDetail() {
@@ -44,6 +44,12 @@ export default function BusinessDetail() {
     [detail.data],
   );
   const packs = detail.data?.rescuePacks ?? [];
+  // Cuántas unidades de cada producto hay ya en el carrito (solo si el carrito es de este local).
+  const inCart = useMemo(() => {
+    const counts = new Map<number, number>();
+    if (cart?.businessId === businessId) for (const i of cart.items) counts.set(i.productId, (counts.get(i.productId) ?? 0) + i.quantity);
+    return counts;
+  }, [cart, businessId]);
 
   if (detail.isLoading) {
     return (
@@ -153,6 +159,8 @@ export default function BusinessDetail() {
             const hasOptions = p.optionGroups.length > 0;
             // Un grupo obligatorio sin opciones disponibles (p. ej. todas las colas agotadas) impide pedir el combo.
             const orderable = p.optionGroups.every(isGroupOrderable);
+            const startPrice = hasOptions ? fromPrice(p.price, p.optionGroups) : p.price;
+            const quantityInCart = inCart.get(p.id) ?? 0;
             return (
             <article
               key={p.id}
@@ -164,7 +172,10 @@ export default function BusinessDetail() {
                 ) : (
                   <div className="grid h-full w-full place-items-center text-6xl">{p.emoji}</div>
                 )}
-                <span className="absolute left-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-extrabold text-brand-dark shadow-sm">Disponible</span>
+                <span className="absolute left-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-extrabold text-brand-dark shadow-sm">{hasOptions ? "🧩 Personalizable" : "Disponible"}</span>
+                {quantityInCart > 0 && (
+                  <span aria-label={`${quantityInCart} en tu carrito`} className="absolute right-3 top-3 grid h-7 min-w-7 place-items-center rounded-full bg-brand px-1.5 text-xs font-extrabold text-white shadow-sm">{quantityInCart}</span>
+                )}
               </div>
               <div className="p-3.5">
                 <div className="flex items-start gap-2">
@@ -174,7 +185,10 @@ export default function BusinessDetail() {
                       <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{productDescription}</p>
                     )}
                   </div>
-                  <p className="font-display shrink-0 text-base font-extrabold text-brand-dark">{money(p.price)}</p>
+                  <p className="font-display shrink-0 text-right text-base font-extrabold text-brand-dark">
+                    {startPrice > p.price && <span className="block text-[10px] font-bold leading-none text-muted-foreground">Desde</span>}
+                    {money(startPrice)}
+                  </p>
                 </div>
                 {ingredients && (
                   <p className="mt-2 rounded-xl bg-secondary/70 px-2.5 py-2 text-[11px] leading-relaxed text-foreground/80">
@@ -183,7 +197,7 @@ export default function BusinessDetail() {
                 )}
                 <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/70 pt-3">
                   <span className="text-[11px] font-semibold text-muted-foreground">
-                    {hasOptions ? (orderable ? "🧩 Personalizable: elige sabor, tamaño y extras" : "No disponible por ahora") : "Precio por unidad"}
+                    {hasOptions ? (orderable ? "Elige sabor, tamaño y extras" : "No disponible por ahora") : "Precio por unidad"}
                   </span>
               <button
                 disabled={!business.openNow || !orderable}
@@ -298,12 +312,12 @@ export default function BusinessDetail() {
       <ProductOptionsDialog
         product={customizing}
         onClose={() => setCustomizing(null)}
-        onAdd={(product, options, unitPrice) => {
+        onAdd={(product, options, unitPrice, quantity) => {
           add(
             { id: business.id, name: business.name, deliveryFee: business.deliveryFee },
-            { productId: product.id, name: product.name, price: unitPrice, emoji: product.emoji, options },
+            { productId: product.id, name: product.name, price: unitPrice, emoji: product.emoji, options, quantity },
           );
-          toast.success(`${product.name} agregado`);
+          toast.success(quantity > 1 ? `${quantity} × ${product.name} agregados` : `${product.name} agregado`);
           setCustomizing(null);
         }}
       />

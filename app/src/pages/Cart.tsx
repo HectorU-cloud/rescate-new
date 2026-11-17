@@ -5,7 +5,8 @@ import { trpc } from "@/providers/trpc";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { money } from "@/lib/format";
-import { describeOptions } from "@contracts/options";
+import { groupOptions } from "@contracts/options";
+import ProductOptionsDialog, { type CustomizableProduct } from "@/components/ProductOptionsDialog";
 import { MOBILE_HINT, normalizeEcuadorMobile } from "@contracts/phone";
 import { toast } from "sonner";
 import { DeliveryMap } from "@/components/DeliveryMap";
@@ -14,7 +15,12 @@ import { useCity } from "@/hooks/useCity";
 type AddressMatch = { label: string; lat: number; lng: number };
 
 export default function Cart() {
-  const { cart, subtotal, setQty, remove, clear } = useCart();
+  const { cart, subtotal, setQty, remove, clear, replaceLine } = useCart();
+  // Para poder editar un combo ya agregado se necesitan los grupos de opciones actuales del producto.
+  const hasCombos = !!cart && cart.items.some((i) => i.options.length > 0);
+  const menu = trpc.catalog.businessDetail.useQuery({ id: cart?.businessId ?? 0 }, { enabled: hasCombos });
+  const editableProducts = new Map((menu.data?.products ?? []).filter((p) => p.isAvailable).map((p) => [p.id, p]));
+  const [editing, setEditing] = useState<{ lineKey: string; product: CustomizableProduct; choiceIds: number[]; quantity: number } | null>(null);
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
   const [fulfillmentMethod, setFulfillmentMethod] = useState<"delivery" | "pickup">("delivery");
@@ -291,7 +297,13 @@ export default function Cart() {
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-extrabold">{i.name}</p>
                 {i.options.length > 0 && (
-                  <p className="text-[11px] font-semibold leading-snug text-foreground/70">{describeOptions(i.options, money)}</p>
+                  <ul className="mt-0.5 space-y-0.5">
+                    {groupOptions(i.options, money).map((g) => (
+                      <li key={g.groupName} className="text-[11px] font-semibold leading-snug text-foreground/70">
+                        <span className="text-muted-foreground">{g.groupName}:</span> {g.text}
+                      </li>
+                    ))}
+                  </ul>
                 )}
                 <p className="text-xs font-bold text-muted-foreground">
                   {money(i.price)} c/u
@@ -318,12 +330,34 @@ export default function Cart() {
               </div>
               <div className="w-20 text-right">
                 <span className="block font-display text-sm font-extrabold">{money(i.price * i.quantity)}</span>
+                {i.options.length > 0 && editableProducts.has(i.productId) && (
+                  <button
+                    type="button"
+                    onClick={() => setEditing({ lineKey: i.lineKey, product: editableProducts.get(i.productId)!, choiceIds: i.options.map((o) => o.choiceId), quantity: i.quantity })}
+                    className="mt-1 block w-full text-right text-[10px] font-extrabold text-brand underline decoration-dotted underline-offset-2"
+                  >
+                    Editar
+                  </button>
+                )}
                 <button type="button" onClick={() => remove(i.lineKey)} className="mt-1 text-[10px] font-bold text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-destructive">Quitar</button>
               </div>
             </li>
           ))}
         </ul>
       </section>
+
+      <ProductOptionsDialog
+        mode="edit"
+        product={editing?.product ?? null}
+        initialChoiceIds={editing?.choiceIds}
+        initialQuantity={editing?.quantity}
+        onClose={() => setEditing(null)}
+        onAdd={(product, options, unitPrice, quantity) => {
+          if (editing) replaceLine(editing.lineKey, { productId: product.id, name: product.name, price: unitPrice, emoji: product.emoji, options, quantity });
+          toast.success("Combo actualizado");
+          setEditing(null);
+        }}
+      />
 
       {/* Entrega */}
       <section className="space-y-3 rounded-3xl bg-card p-4 shadow-sm ring-1 ring-border">

@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { BUSINESS_RULES } from "@contracts/constants";
 import { courierPayToBusiness } from "@contracts/fees";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ChatBox } from "@/components/ChatBox";
+import { ChatButton } from "@/components/ChatBox";
 import { ClaimBox } from "@/components/ClaimBox";
 import { StaticMap } from "@/components/StaticMap";
 import WalletCard from "@/components/WalletCard";
@@ -317,9 +317,12 @@ export default function CourierPanel() {
                     {items.map((i) => `${i.quantity}× ${i.name}`).join(", ")}
                   </p>
                 </div>
-                <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-extrabold text-brand-dark">
-                  +{money(order.deliveryFee)}
-                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="rounded-full bg-brand-soft px-2.5 py-1 text-xs font-extrabold text-brand-dark">
+                    +{money(order.deliveryFee)}
+                  </span>
+                  <ChatButton orderId={order.id} />
+                </div>
               </div>
               <div className="mt-3 rounded-2xl bg-amber-100 p-3 text-amber-950">
                 <p className="text-xs font-extrabold">💵 Págale al local</p>
@@ -415,9 +418,6 @@ export default function CourierPanel() {
               >
                 {deliver.isPending ? "Verificando código…" : "✔️ Confirmar entrega"}
               </button>
-              <div className="mt-3">
-                <ChatBox orderId={order.id} />
-              </div>
               <ClaimBox orderId={order.id} role="courier" collapsible />
             </div>
           ))}
